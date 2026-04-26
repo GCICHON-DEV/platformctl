@@ -1,0 +1,9 @@
+template:
+  source: platformctl/aws-eks-standard
+  version: v1.0.0
+
+values:
+  project_name: demo
+  aws_region: eu-central-1
+  aws_profile: default
+  cluster_name: demo-platform

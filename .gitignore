@@ -1,0 +1,12 @@
+platformctl
+.DS_Store
+.env
+*.secret.yaml
+secrets.yaml
+generated/
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+dist/

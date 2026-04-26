@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ .Namespace }}-quota
+  namespace: {{ .Namespace }}
+spec:
+  hard:
+    requests.cpu: "{{ .ResourceQuota.CPU }}"
+    requests.memory: "{{ .ResourceQuota.Memory }}"
+    limits.cpu: "{{ .ResourceQuota.CPU }}"
+    limits.memory: "{{ .ResourceQuota.Memory }}"

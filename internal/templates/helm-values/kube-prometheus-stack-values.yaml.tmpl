@@ -1,0 +1,12 @@
+grafana:
+  adminUser: "{{ .Monitoring.Grafana.AdminUser }}"
+  service:
+    type: ClusterIP
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    scrapeInterval: 30s
+
+alertmanager:
+  enabled: true
