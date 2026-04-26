@@ -3,9 +3,8 @@ package cmd
 import (
 	"fmt"
 
-	"platformctl/internal/config"
 	"platformctl/internal/executor"
-	"platformctl/internal/generator"
+	"platformctl/internal/templateengine"
 
 	"github.com/spf13/cobra"
 )
@@ -15,34 +14,29 @@ func newDownCmd() *cobra.Command {
 		Use:   "down",
 		Short: "Destroy the platform from platform.yaml",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(defaultConfigFile)
+			resolved, err := templateengine.Load(defaultConfigFile)
 			if err != nil {
 				return err
 			}
-			if err := cfg.Validate(); err != nil {
+			if err := resolved.Validate(); err != nil {
 				return err
 			}
 
 			runner := executor.NewRunner(cmd.OutOrStdout(), cmd.ErrOrStderr())
-			if err := runner.RequireTools("terraform"); err != nil {
+			if err := runner.RequireTools(resolved.RequiredTools()...); err != nil {
 				return err
 			}
 
-			gen := generator.New("generated")
-			if err := gen.Generate(cfg); err != nil {
+			if err := resolved.Generate(); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Generated Terraform files before destroy.")
+			fmt.Fprintf(cmd.OutOrStdout(), "Generated platform files from template %s before destroy.\n", resolved.Manifest.Name)
 
-			tf := executor.NewTerraform(runner, "generated/terraform")
-			if err := tf.Init(); err != nil {
-				return err
-			}
-			if err := tf.Destroy(); err != nil {
+			if err := resolved.RunSteps(runner, resolved.Manifest.Workflow.Down); err != nil {
 				return err
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), "Terraform destroy finished.")
+			fmt.Fprintln(cmd.OutOrStdout(), "Platform destroy workflow finished.")
 			return nil
 		},
 	}

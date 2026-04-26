@@ -1,24 +1,16 @@
 # platformctl
 
-`platformctl` is a simple bootstrapper for creating a real AWS developer platform.
+`platformctl` is a simple template-driven bootstrapper for creating developer platforms.
 
-It is not a replacement for Terraform, Helm, kubectl, or AWS CLI. It uses those tools underneath so a developer can create, inspect, use, and destroy a working platform without manually learning every DevOps step first.
+It is not a replacement for Terraform, Helm, kubectl, AWS CLI, Azure CLI, Kind, or other platform tools. It is a small engine that downloads a platform template, renders the files declared by that template, and runs the workflow declared by that template.
 
-The platform includes:
+Templates can target different environments:
 
-- AWS VPC
-- AWS EKS
-- managed node group
-- kubeconfig
-- namespaces for `dev`, `staging`, and `production`
-- ArgoCD
-- kube-prometheus-stack
-- Prometheus
-- Grafana
-- ingress-nginx
-- resource quotas, limit ranges, and baseline network policies
+- `platformctl/aws-eks-standard`
+- `platformctl/azure-aks-standard`
+- `platformctl/local-kind-standard`
 
-This MVP does not deploy application workloads yet. The next layer can add app commands for Docker image builds, chart generation, ECR push, and ArgoCD based deployment.
+This MVP does not deploy application workloads yet. The next layer can add app commands for Docker image builds, chart generation, registry push, and ArgoCD based deployment.
 
 ## Commands
 
@@ -35,7 +27,7 @@ platformctl down
 
 ## Requirements
 
-Install these tools locally:
+Install the tools required by the selected template. For the AWS template:
 
 - Terraform
 - AWS CLI
@@ -107,7 +99,7 @@ values:
   cluster_name: demo-platform
 ```
 
-The selected template provides the rest of the platform defaults: VPC CIDR, availability zone count, node group limits, `dev/staging/production` namespaces, ArgoCD, monitoring, ingress, quotas, and limit ranges.
+The selected template provides the rest of the platform defaults and workflow.
 
 Edit `platform.yaml` if you want to change the project name, AWS region, AWS profile, cluster name, Kubernetes version, node size, or node count.
 
@@ -123,7 +115,7 @@ template:
   version: v1.0.0
 ```
 
-This is intentionally closer to Terraform modules or Helm chart repositories: the CLI does not hardcode the platform template in the binary. It resolves the registry reference to a remote template manifest, downloads it, caches it under `~/.platformctl/templates`, merges template defaults with user values, and then generates the internal Terraform/Kubernetes/Helm files.
+This is intentionally closer to Terraform modules or Helm chart repositories: the CLI does not hardcode provider-specific platform logic. It resolves the registry reference to a remote template manifest, downloads it, caches it under `~/.platformctl/templates`, merges template defaults with user values, renders files declared by the template, and runs the workflow declared by the template.
 
 The built-in registry namespace currently resolves like this:
 
@@ -140,9 +132,58 @@ export PLATFORMCTL_TEMPLATE_REGISTRY_URL=http://localhost:8765
 
 Full HTTP/HTTPS URLs are also supported in `template.source` for direct template manifests.
 
-The repo includes [examples/template-registry/aws-eks-standard.yaml](examples/template-registry/aws-eks-standard.yaml) as the first template manifest to publish into a separate template repository.
+The repo includes example template manifests under [examples/template-registry](examples/template-registry):
 
-A template manifest contains non-secret defaults such as VPC CIDR, availability zone count, node group limits, `dev/staging/production` namespaces, ArgoCD, monitoring, ingress, quotas, and limit ranges.
+- `aws-eks-standard.yaml`
+- `azure-aks-standard.yaml`
+- `local-kind-standard.yaml`
+
+A template manifest can define:
+
+- required input values
+- default values
+- required local tools
+- files to render into `generated/`
+- the `up` workflow
+- the `down` workflow
+- success messages
+
+Minimal shape:
+
+```yaml
+apiVersion: platformctl.io/v1
+kind: PlatformTemplate
+name: my-template
+
+requirements:
+  tools:
+    - name: terraform
+    - name: kubectl
+
+inputs:
+  project_name:
+    required: true
+
+defaults:
+  cluster_name: demo
+
+files:
+  - path: generated/example.txt
+    content: |
+      project={{ .Values.project_name }}
+
+workflow:
+  up:
+    - name: example
+      command: echo
+      args: ["hello", "{{ .Values.project_name }}"]
+  down:
+    - name: cleanup
+      command: echo
+      args: ["bye"]
+```
+
+All template-rendered files must be written under `generated/`.
 
 ## Secrets
 
@@ -182,14 +223,9 @@ This checks `platform.yaml` and reports configuration problems before any AWS re
 `up` performs these steps:
 
 1. Loads and validates `platform.yaml`.
-2. Checks for `terraform`, `aws`, `kubectl`, and `helm`.
-3. Generates internal files into `generated/`.
-4. Runs `terraform init`.
-5. Runs `terraform plan`.
-6. Runs `terraform apply -auto-approve`.
-7. Runs `aws eks update-kubeconfig`.
-8. Applies Kubernetes namespaces, quotas, limit ranges, and network policies.
-9. Installs ArgoCD, kube-prometheus-stack, and ingress-nginx.
+2. Checks the tools required by the selected template.
+3. Generates files declared by the selected template into `generated/`.
+4. Runs the selected template's `workflow.up` steps.
 
 ## Verify
 
@@ -235,20 +271,13 @@ The default username comes from the selected template or `values.grafana_admin_u
 ./platformctl down
 ```
 
-`down` regenerates the internal Terraform files from `platform.yaml` and runs:
-
-```bash
-terraform destroy -auto-approve
-```
-
-It does not remove Helm charts first. Terraform deletion of the cluster and surrounding AWS resources is the source of truth for this MVP.
+`down` regenerates files from the selected template and runs the selected template's `workflow.down` steps.
 
 ## What Happens Under The Hood
 
-- Terraform creates AWS VPC, subnets, NAT Gateway, EKS, and managed node groups.
-- AWS CLI updates your local kubeconfig.
-- kubectl applies namespaces and baseline Kubernetes policies.
-- Helm installs ArgoCD, Prometheus/Grafana, and ingress-nginx.
+- AWS templates can use Terraform modules, AWS CLI, kubectl, and Helm.
+- Azure templates can use Terraform AzureRM, Azure CLI, kubectl, and Helm.
+- Local templates can use Docker, Kind, kubectl, and Helm.
 
 You do not need to run these steps manually for the MVP workflow.
 

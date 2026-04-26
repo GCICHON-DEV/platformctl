@@ -3,10 +3,8 @@ package cmd
 import (
 	"fmt"
 
-	"platformctl/internal/bootstrap"
-	"platformctl/internal/config"
 	"platformctl/internal/executor"
-	"platformctl/internal/generator"
+	"platformctl/internal/templateengine"
 
 	"github.com/spf13/cobra"
 )
@@ -16,47 +14,31 @@ func newUpCmd() *cobra.Command {
 		Use:   "up",
 		Short: "Create the platform from platform.yaml",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load(defaultConfigFile)
+			resolved, err := templateengine.Load(defaultConfigFile)
 			if err != nil {
 				return err
 			}
-			if err := cfg.Validate(); err != nil {
+			if err := resolved.Validate(); err != nil {
 				return err
 			}
 
 			runner := executor.NewRunner(cmd.OutOrStdout(), cmd.ErrOrStderr())
-			if err := runner.RequireTools("terraform", "aws", "kubectl", "helm"); err != nil {
+			if err := runner.RequireTools(resolved.RequiredTools()...); err != nil {
 				return err
 			}
 
-			gen := generator.New("generated")
-			if err := gen.Generate(cfg); err != nil {
+			if err := resolved.Generate(); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Generated platform files in generated/")
+			fmt.Fprintf(cmd.OutOrStdout(), "Generated platform files from template %s.\n", resolved.Manifest.Name)
 
-			tf := executor.NewTerraform(runner, "generated/terraform")
-			if err := tf.Init(); err != nil {
-				return err
-			}
-			if err := tf.Plan(); err != nil {
-				return err
-			}
-			if err := tf.Apply(); err != nil {
+			if err := resolved.RunSteps(runner, resolved.Manifest.Workflow.Up); err != nil {
 				return err
 			}
 
-			aws := executor.NewAWS(runner)
-			if err := aws.UpdateKubeconfig(cfg.Provider.Region, cfg.Cluster.Name, cfg.Provider.Profile); err != nil {
-				return err
+			for _, message := range resolved.SuccessMessages() {
+				fmt.Fprintln(cmd.OutOrStdout(), message)
 			}
-
-			bs := bootstrap.New(runner, "generated", cfg)
-			if err := bs.Run(); err != nil {
-				return err
-			}
-
-			printAccessInstructions(cmd.OutOrStdout(), cfg)
 			return nil
 		},
 	}

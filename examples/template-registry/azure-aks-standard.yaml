@@ -1,14 +1,14 @@
 apiVersion: platformctl.io/v1
 kind: PlatformTemplate
-name: aws-eks-standard
-description: Standard AWS EKS developer platform with ArgoCD, monitoring, and ingress.
+name: azure-aks-standard
+description: Standard Azure AKS developer platform with ArgoCD, monitoring, and ingress.
 
 requirements:
   tools:
     - name: terraform
       install_hint: https://developer.hashicorp.com/terraform/install
-    - name: aws
-      install_hint: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+    - name: az
+      install_hint: https://learn.microsoft.com/cli/azure/install-azure-cli
     - name: kubectl
       install_hint: https://kubernetes.io/docs/tasks/tools/
     - name: helm
@@ -17,36 +17,29 @@ requirements:
 inputs:
   project_name:
     required: true
-    description: Project name used for tags and resource names.
-  aws_region:
+  azure_location:
     required: true
-    default: eu-central-1
-  aws_profile:
-    required: false
-    default: default
+    default: westeurope
+  resource_group:
+    required: true
   cluster_name:
     required: true
   kubernetes_version:
     required: false
-    default: "1.34"
-  vpc_cidr:
+    default: "1.30"
+  node_vm_size:
     required: false
-    default: "10.0.0.0/16"
-  az_count:
-    required: false
-    default: 2
-  node_instance_type:
-    required: false
-    default: t3.medium
-  node_desired_capacity:
+    default: Standard_B2s
+  node_count:
     required: false
     default: 2
 
 defaults:
   environment_prefix: platform
-  node_group_name: general
-  node_min_capacity: 1
-  node_max_capacity: 4
+  argocd_namespace: argocd
+  monitoring_namespace: monitoring
+  grafana_admin_user: admin
+  ingress_namespace: ingress-nginx
   environments:
     - name: dev
       namespace: dev
@@ -66,10 +59,6 @@ defaults:
       memory: "16Gi"
       default_cpu: "1"
       default_memory: "1Gi"
-  argocd_namespace: argocd
-  monitoring_namespace: monitoring
-  grafana_admin_user: admin
-  ingress_namespace: ingress-nginx
 
 files:
   - path: generated/terraform/versions.tf
@@ -78,115 +67,58 @@ files:
         required_version = ">= 1.5.7"
 
         required_providers {
-          aws = {
-            source  = "hashicorp/aws"
-            version = ">= 6.28"
+          azurerm = {
+            source  = "hashicorp/azurerm"
+            version = "~> 4.0"
           }
         }
       }
 
-      provider "aws" {
-        region  = "{{ .Values.aws_region }}"
-        profile = "{{ .Values.aws_profile }}"
+      provider "azurerm" {
+        features {}
       }
   - path: generated/terraform/main.tf
     content: |
-      data "aws_availability_zones" "available" {
-        state = "available"
-      }
-
-      locals {
-        azs             = slice(data.aws_availability_zones.available.names, 0, {{ .Values.az_count }})
-        private_subnets = [for i in range({{ .Values.az_count }}) : cidrsubnet({{ quote .Values.vpc_cidr }}, 8, i)]
-        public_subnets  = [for i in range({{ .Values.az_count }}) : cidrsubnet({{ quote .Values.vpc_cidr }}, 8, i + {{ .Values.az_count }})]
+      resource "azurerm_resource_group" "this" {
+        name     = "{{ .Values.resource_group }}"
+        location = "{{ .Values.azure_location }}"
 
         tags = {
-          Project     = "{{ .Values.project_name }}"
-          Environment = "{{ .Values.environment_prefix }}"
-          ManagedBy   = "platformctl"
+          Project   = "{{ .Values.project_name }}"
+          ManagedBy = "platformctl"
         }
       }
-  - path: generated/terraform/vpc.tf
-    content: |
-      module "vpc" {
-        source  = "terraform-aws-modules/vpc/aws"
-        version = "~> 6.0"
 
-        name = "{{ .Values.project_name }}-vpc"
-        cidr = "{{ .Values.vpc_cidr }}"
+      resource "azurerm_kubernetes_cluster" "this" {
+        name                = "{{ .Values.cluster_name }}"
+        location            = azurerm_resource_group.this.location
+        resource_group_name = azurerm_resource_group.this.name
+        dns_prefix          = "{{ .Values.cluster_name }}"
+        kubernetes_version  = "{{ .Values.kubernetes_version }}"
 
-        azs             = local.azs
-        private_subnets = local.private_subnets
-        public_subnets  = local.public_subnets
-
-        enable_nat_gateway = true
-        single_nat_gateway = true
-
-        enable_dns_hostnames = true
-        enable_dns_support   = true
-
-        public_subnet_tags = {
-          "kubernetes.io/role/elb" = 1
+        default_node_pool {
+          name       = "general"
+          node_count = {{ .Values.node_count }}
+          vm_size    = "{{ .Values.node_vm_size }}"
         }
 
-        private_subnet_tags = {
-          "kubernetes.io/role/internal-elb" = 1
+        identity {
+          type = "SystemAssigned"
         }
 
-        tags = local.tags
-      }
-  - path: generated/terraform/eks.tf
-    content: |
-      module "eks" {
-        source  = "terraform-aws-modules/eks/aws"
-        version = "~> 21.0"
-
-        name               = "{{ .Values.cluster_name }}"
-        kubernetes_version = "{{ .Values.kubernetes_version }}"
-
-        endpoint_public_access                   = true
-        enable_cluster_creator_admin_permissions = true
-
-        addons = {
-          coredns = {}
-          eks-pod-identity-agent = {
-            before_compute = true
-          }
-          kube-proxy = {}
-          vpc-cni = {
-            before_compute = true
-          }
+        tags = {
+          Project   = "{{ .Values.project_name }}"
+          ManagedBy = "platformctl"
         }
-
-        vpc_id                   = module.vpc.vpc_id
-        subnet_ids               = module.vpc.private_subnets
-        control_plane_subnet_ids = module.vpc.private_subnets
-
-        eks_managed_node_groups = {
-          "{{ .Values.node_group_name }}" = {
-            ami_type       = "AL2023_x86_64_STANDARD"
-            instance_types = ["{{ .Values.node_instance_type }}"]
-
-            min_size     = {{ .Values.node_min_capacity }}
-            max_size     = {{ .Values.node_max_capacity }}
-            desired_size = {{ .Values.node_desired_capacity }}
-          }
-        }
-
-        tags = local.tags
       }
   - path: generated/terraform/outputs.tf
     content: |
       output "cluster_name" {
-        value = module.eks.cluster_name
+        value = azurerm_kubernetes_cluster.this.name
       }
 
-      output "cluster_endpoint" {
-        value = module.eks.cluster_endpoint
-      }
-
-      output "region" {
-        value = "{{ .Values.aws_region }}"
+      output "resource_group" {
+        value = azurerm_resource_group.this.name
       }
   - path: generated/kubernetes/environments.yaml
     content: |
@@ -196,9 +128,6 @@ files:
       kind: Namespace
       metadata:
         name: {{ .namespace }}
-        labels:
-          platformctl.io/environment: {{ .name }}
-          platformctl.io/managed: "true"
       ---
       apiVersion: v1
       kind: ResourceQuota
@@ -226,48 +155,21 @@ files:
             defaultRequest:
               cpu: "{{ .default_cpu }}"
               memory: "{{ .default_memory }}"
-      ---
-      apiVersion: networking.k8s.io/v1
-      kind: NetworkPolicy
-      metadata:
-        name: {{ .namespace }}-baseline-network-policy
-        namespace: {{ .namespace }}
-      spec:
-        podSelector: {}
-        policyTypes:
-          - Ingress
-          - Egress
-        ingress:
-          - from:
-              - podSelector: {}
-        egress:
-          - {}
       {{- end }}
   - path: generated/helm-values/argocd-values.yaml
     content: |
       configs:
         params:
           server.insecure: true
-      server:
-        service:
-          type: ClusterIP
   - path: generated/helm-values/kube-prometheus-stack-values.yaml
     content: |
       grafana:
         adminUser: "{{ .Values.grafana_admin_user }}"
-        service:
-          type: ClusterIP
-      prometheus:
-        prometheusSpec:
-          retention: 7d
-          scrapeInterval: 30s
   - path: generated/helm-values/ingress-nginx-values.yaml
     content: |
       controller:
         service:
           type: LoadBalancer
-        metrics:
-          enabled: true
 
 workflow:
   up:
@@ -283,9 +185,9 @@ workflow:
       command: terraform
       dir: generated/terraform
       args: ["apply", "-auto-approve"]
-    - name: aws eks update-kubeconfig
-      command: aws
-      args: ["eks", "update-kubeconfig", "--region", "{{ .Values.aws_region }}", "--name", "{{ .Values.cluster_name }}", "--profile", "{{ .Values.aws_profile }}"]
+    - name: az aks get-credentials
+      command: az
+      args: ["aks", "get-credentials", "--resource-group", "{{ .Values.resource_group }}", "--name", "{{ .Values.cluster_name }}", "--overwrite-existing"]
     - name: helm repo add argo
       command: helm
       args: ["repo", "add", "argo", "https://argoproj.github.io/argo-helm", "--force-update"]
@@ -323,6 +225,5 @@ workflow:
 outputs:
   success:
     - "Check cluster: kubectl get nodes"
-    - "Check pods: kubectl get pods -A"
     - "ArgoCD: kubectl -n {{ .Values.argocd_namespace }} port-forward svc/argocd-server 8080:443"
     - "Grafana: kubectl -n {{ .Values.monitoring_namespace }} port-forward svc/monitoring-grafana 3000:80"

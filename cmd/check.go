@@ -1,16 +1,11 @@
 package cmd
 
 import (
-	"bytes"
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"strings"
-	"time"
 
-	"platformctl/internal/config"
 	"platformctl/internal/deps"
+	"platformctl/internal/templateengine"
 
 	"github.com/spf13/cobra"
 )
@@ -21,11 +16,24 @@ func newCheckCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "check",
-		Short: "Check local tools and AWS access",
+		Short: "Check local tools required by the selected template",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			tools := deps.RuntimeTools()
+			tools := []deps.Tool{}
+			resolved, err := loadTemplateIfPresent(cmd)
+			if err != nil {
+				return err
+			}
+			if resolved != nil {
+				for _, tool := range resolved.Manifest.Requirements.Tools {
+					tools = append(tools, deps.Tool{Name: tool.Name, RequiredFor: resolved.Manifest.Name, BrewPackage: tool.Name, VersionArgs: []string{"--version"}})
+				}
+			}
 			if includeDev {
 				tools = append(tools, deps.DevTools()...)
+			}
+			if len(tools) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "No tools to check.")
+				return nil
 			}
 
 			statuses := deps.Check(tools)
@@ -50,10 +58,6 @@ func newCheckCmd() *cobra.Command {
 				}
 			}
 
-			if err := checkConfigAndAWS(cmd); err != nil {
-				return err
-			}
-
 			fmt.Fprintln(cmd.OutOrStdout(), "\nAll required checks passed.")
 			return nil
 		},
@@ -62,6 +66,25 @@ func newCheckCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&install, "install", false, "install missing dependencies when supported")
 	cmd.Flags().BoolVar(&includeDev, "dev", false, "also check Go, which is required for building from source")
 	return cmd
+}
+
+func loadTemplateIfPresent(cmd *cobra.Command) (*templateengine.Resolved, error) {
+	if _, err := os.Stat(defaultConfigFile); os.IsNotExist(err) {
+		fmt.Fprintf(cmd.OutOrStdout(), "[skip]    %s not found; template checks skipped\n", defaultConfigFile)
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("check %s: %w", defaultConfigFile, err)
+	}
+
+	resolved, err := templateengine.Load(defaultConfigFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := resolved.Validate(); err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "[ok]      template %s\n", resolved.Manifest.Name)
+	return resolved, nil
 }
 
 func printDependencyStatus(cmd *cobra.Command, statuses []deps.Status) {
@@ -76,47 +99,4 @@ func printDependencyStatus(cmd *cobra.Command, statuses []deps.Status) {
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "[missing] %-10s required for %s\n", status.Tool.Name, status.Tool.RequiredFor)
 	}
-}
-
-func checkConfigAndAWS(cmd *cobra.Command) error {
-	if _, err := os.Stat(defaultConfigFile); os.IsNotExist(err) {
-		fmt.Fprintf(cmd.OutOrStdout(), "\n[skip]    %s not found; config and AWS identity check skipped\n", defaultConfigFile)
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("check %s: %w", defaultConfigFile, err)
-	}
-
-	cfg, err := config.Load(defaultConfigFile)
-	if err != nil {
-		return err
-	}
-	if cfg.Provider.Name != "aws" {
-		return fmt.Errorf("provider.name must be aws before AWS identity can be checked")
-	}
-	if cfg.Provider.Region == "" {
-		return fmt.Errorf("provider.region is required before AWS identity can be checked")
-	}
-
-	args := []string{"sts", "get-caller-identity", "--region", cfg.Provider.Region}
-	if cfg.Provider.Profile != "" {
-		args = append(args, "--profile", cfg.Provider.Profile)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	aws := exec.CommandContext(ctx, "aws", args...)
-	var out bytes.Buffer
-	aws.Stdout = &out
-	aws.Stderr = &out
-	if err := aws.Run(); err != nil {
-		output := strings.TrimSpace(out.String())
-		if output != "" {
-			return fmt.Errorf("AWS identity check failed: %w\n%s", err, output)
-		}
-		return fmt.Errorf("AWS identity check failed: %w", err)
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "[ok]      aws identity for profile %q in %s\n", cfg.Provider.Profile, cfg.Provider.Region)
-	return nil
 }
