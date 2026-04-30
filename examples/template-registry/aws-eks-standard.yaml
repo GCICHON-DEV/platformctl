@@ -1,52 +1,101 @@
-apiVersion: platformctl.io/v1
+apiVersion: platformctl.io/v1alpha2
 kind: PlatformTemplate
-name: aws-eks-standard
-description: Standard AWS EKS developer platform with ArgoCD, monitoring, and ingress.
+metadata:
+  name: aws-eks-standard
+  description: Standard AWS EKS developer platform with ArgoCD, monitoring, and ingress.
+  tags: [aws, eks, terraform, gitops, monitoring]
+  maintainer: platformctl
 
 requirements:
+  warnings:
+    - AWS EKS, NAT Gateway, EC2 nodes, EBS volumes, and LoadBalancer services can generate costs.
+  credentials:
+    - name: aws
+      description: AWS CLI profile must have permission to create EKS, VPC, IAM, EC2, and ELB resources.
+      command: aws sts get-caller-identity --profile {{ .Values.aws_profile }}
   tools:
     - name: terraform
+      version: "1.5.7"
+      min_version: "1.5.7"
+      version_args: ["version"]
       install_hint: https://developer.hashicorp.com/terraform/install
     - name: aws
+      version_args: ["--version"]
       install_hint: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
     - name: kubectl
+      version: "v1.34.0"
+      version_args: ["version", "--client"]
       install_hint: https://kubernetes.io/docs/tasks/tools/
     - name: helm
+      version: "v3.18.6"
+      version_args: ["version", "--short"]
       install_hint: https://helm.sh/docs/intro/install/
 
 inputs:
   project_name:
+    description: Project identifier used for AWS tags and resource names.
+    type: string
     required: true
-    description: Project name used for tags and resource names.
-  aws_region:
+    example: demo
+    validation: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+  region:
+    description: AWS region where the EKS platform will be created.
+    type: string
     required: true
     default: eu-central-1
+    example: eu-central-1
   aws_profile:
+    description: Local AWS CLI profile used by Terraform and kubeconfig updates.
+    type: string
     required: false
     default: default
+    example: default
   cluster_name:
+    description: EKS cluster name; must be a valid lowercase Kubernetes name.
+    type: string
     required: true
+    example: demo-platform
+    validation: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
   kubernetes_version:
+    description: Kubernetes control plane version for EKS.
+    type: string
     required: false
     default: "1.34"
+    example: "1.34"
   vpc_cidr:
+    description: CIDR block for the generated VPC.
+    type: string
     required: false
     default: "10.0.0.0/16"
+    example: "10.0.0.0/16"
   az_count:
+    description: Number of availability zones used for public and private subnets.
+    type: integer
     required: false
     default: 2
+    example: 2
   node_instance_type:
+    description: EC2 instance type for the default managed node group.
+    type: string
     required: false
     default: t3.medium
+    example: t3.medium
   node_desired_capacity:
+    description: Desired number of worker nodes in the default node group.
+    type: integer
     required: false
     default: 2
+    example: 2
 
 defaults:
   environment_prefix: platform
   node_group_name: general
   node_min_capacity: 1
   node_max_capacity: 4
+  argocd_namespace: argocd
+  monitoring_namespace: monitoring
+  grafana_admin_user: admin
+  ingress_namespace: ingress-nginx
   environments:
     - name: dev
       namespace: dev
@@ -66,17 +115,12 @@ defaults:
       memory: "16Gi"
       default_cpu: "1"
       default_memory: "1Gi"
-  argocd_namespace: argocd
-  monitoring_namespace: monitoring
-  grafana_admin_user: admin
-  ingress_namespace: ingress-nginx
 
 files:
   - path: generated/terraform/versions.tf
     content: |
       terraform {
         required_version = ">= 1.5.7"
-
         required_providers {
           aws = {
             source  = "hashicorp/aws"
@@ -86,7 +130,7 @@ files:
       }
 
       provider "aws" {
-        region  = "{{ .Values.aws_region }}"
+        region  = "{{ .Values.region }}"
         profile = "{{ .Values.aws_profile }}"
       }
   - path: generated/terraform/main.tf
@@ -99,7 +143,6 @@ files:
         azs             = slice(data.aws_availability_zones.available.names, 0, {{ .Values.az_count }})
         private_subnets = [for i in range({{ .Values.az_count }}) : cidrsubnet({{ quote .Values.vpc_cidr }}, 8, i)]
         public_subnets  = [for i in range({{ .Values.az_count }}) : cidrsubnet({{ quote .Values.vpc_cidr }}, 8, i + {{ .Values.az_count }})]
-
         tags = {
           Project     = "{{ .Values.project_name }}"
           Environment = "{{ .Values.environment_prefix }}"
@@ -119,20 +162,17 @@ files:
         private_subnets = local.private_subnets
         public_subnets  = local.public_subnets
 
-        enable_nat_gateway = true
-        single_nat_gateway = true
-
+        enable_nat_gateway   = true
+        single_nat_gateway   = true
         enable_dns_hostnames = true
         enable_dns_support   = true
 
         public_subnet_tags = {
           "kubernetes.io/role/elb" = 1
         }
-
         private_subnet_tags = {
           "kubernetes.io/role/internal-elb" = 1
         }
-
         tags = local.tags
       }
   - path: generated/terraform/eks.tf
@@ -166,13 +206,11 @@ files:
           "{{ .Values.node_group_name }}" = {
             ami_type       = "AL2023_x86_64_STANDARD"
             instance_types = ["{{ .Values.node_instance_type }}"]
-
-            min_size     = {{ .Values.node_min_capacity }}
-            max_size     = {{ .Values.node_max_capacity }}
-            desired_size = {{ .Values.node_desired_capacity }}
+            min_size       = {{ .Values.node_min_capacity }}
+            max_size       = {{ .Values.node_max_capacity }}
+            desired_size   = {{ .Values.node_desired_capacity }}
           }
         }
-
         tags = local.tags
       }
   - path: generated/terraform/outputs.tf
@@ -186,7 +224,7 @@ files:
       }
 
       output "region" {
-        value = "{{ .Values.aws_region }}"
+        value = "{{ .Values.region }}"
       }
   - path: generated/kubernetes/environments.yaml
     content: |
@@ -226,22 +264,6 @@ files:
             defaultRequest:
               cpu: "{{ .default_cpu }}"
               memory: "{{ .default_memory }}"
-      ---
-      apiVersion: networking.k8s.io/v1
-      kind: NetworkPolicy
-      metadata:
-        name: {{ .namespace }}-baseline-network-policy
-        namespace: {{ .namespace }}
-      spec:
-        podSelector: {}
-        policyTypes:
-          - Ingress
-          - Egress
-        ingress:
-          - from:
-              - podSelector: {}
-        egress:
-          - {}
       {{- end }}
   - path: generated/helm-values/argocd-values.yaml
     content: |
@@ -269,56 +291,99 @@ files:
         metrics:
           enabled: true
 
-workflow:
-  up:
-    - name: terraform init
-      command: terraform
-      dir: generated/terraform
-      args: ["init"]
+steps:
+  plan:
     - name: terraform plan
+      id: terraform-plan
       command: terraform
       dir: generated/terraform
       args: ["plan"]
-    - name: terraform apply
-      command: terraform
-      dir: generated/terraform
-      args: ["apply", "-auto-approve"]
-    - name: aws eks update-kubeconfig
-      command: aws
-      args: ["eks", "update-kubeconfig", "--region", "{{ .Values.aws_region }}", "--name", "{{ .Values.cluster_name }}", "--profile", "{{ .Values.aws_profile }}"]
-    - name: helm repo add argo
-      command: helm
-      args: ["repo", "add", "argo", "https://argoproj.github.io/argo-helm", "--force-update"]
-    - name: helm repo add prometheus-community
-      command: helm
-      args: ["repo", "add", "prometheus-community", "https://prometheus-community.github.io/helm-charts", "--force-update"]
-    - name: helm repo add ingress-nginx
-      command: helm
-      args: ["repo", "add", "ingress-nginx", "https://kubernetes.github.io/ingress-nginx", "--force-update"]
-    - name: helm repo update
-      command: helm
-      args: ["repo", "update"]
-    - name: kubectl apply platform manifests
-      command: kubectl
-      args: ["apply", "-f", "generated/kubernetes"]
-    - name: install ArgoCD
-      command: helm
-      args: ["upgrade", "--install", "argocd", "argo/argo-cd", "-n", "{{ .Values.argocd_namespace }}", "--create-namespace", "-f", "generated/helm-values/argocd-values.yaml"]
-    - name: install monitoring
-      command: helm
-      args: ["upgrade", "--install", "monitoring", "prometheus-community/kube-prometheus-stack", "-n", "{{ .Values.monitoring_namespace }}", "--create-namespace", "-f", "generated/helm-values/kube-prometheus-stack-values.yaml"]
-    - name: install ingress-nginx
-      command: helm
-      args: ["upgrade", "--install", "ingress-nginx", "ingress-nginx/ingress-nginx", "-n", "{{ .Values.ingress_namespace }}", "--create-namespace", "-f", "generated/helm-values/ingress-nginx-values.yaml"]
-  down:
+      timeout_seconds: 1800
+      suggestion: Check Terraform provider initialization, AWS credentials, and input values.
+  apply:
     - name: terraform init
+      id: terraform-init
       command: terraform
       dir: generated/terraform
       args: ["init"]
+      timeout_seconds: 900
+      suggestion: Check network access to Terraform registry and provider downloads.
+    - name: terraform apply
+      id: terraform-apply
+      command: terraform
+      dir: generated/terraform
+      args: ["apply", "-auto-approve"]
+      timeout_seconds: 3600
+      suggestion: Check AWS credentials, quota, and Terraform provider errors.
+    - name: aws eks update-kubeconfig
+      id: aws-update-kubeconfig
+      command: aws
+      args: ["eks", "update-kubeconfig", "--region", "{{ .Values.region }}", "--name", "{{ .Values.cluster_name }}", "--profile", "{{ .Values.aws_profile }}"]
+      timeout_seconds: 300
+      suggestion: Verify the EKS cluster exists and the AWS profile can call eks:DescribeCluster.
+    - name: helm repo add argo
+      id: helm-repo-argo
+      command: helm
+      args: ["repo", "add", "argo", "https://argoproj.github.io/argo-helm", "--force-update"]
+      timeout_seconds: 120
+      suggestion: Check network access to the Argo Helm repository.
+    - name: helm repo add prometheus-community
+      id: helm-repo-prometheus
+      command: helm
+      args: ["repo", "add", "prometheus-community", "https://prometheus-community.github.io/helm-charts", "--force-update"]
+      timeout_seconds: 120
+      suggestion: Check network access to the Prometheus Community Helm repository.
+    - name: helm repo add ingress-nginx
+      id: helm-repo-ingress
+      command: helm
+      args: ["repo", "add", "ingress-nginx", "https://kubernetes.github.io/ingress-nginx", "--force-update"]
+      timeout_seconds: 120
+      suggestion: Check network access to the ingress-nginx Helm repository.
+    - name: helm repo update
+      id: helm-repo-update
+      command: helm
+      args: ["repo", "update"]
+      timeout_seconds: 300
+      suggestion: Check network access and retry after the Helm repository index is reachable.
+    - name: kubectl apply platform manifests
+      id: kubectl-apply-manifests
+      command: kubectl
+      args: ["apply", "-f", "generated/kubernetes"]
+      timeout_seconds: 300
+      suggestion: Verify kubeconfig points at the new EKS cluster and kubectl get nodes succeeds.
+    - name: install ArgoCD
+      id: helm-install-argocd
+      command: helm
+      args: ["upgrade", "--install", "argocd", "argo/argo-cd", "-n", "{{ .Values.argocd_namespace }}", "--create-namespace", "-f", "generated/helm-values/argocd-values.yaml", "--wait", "--timeout", "10m"]
+      timeout_seconds: 900
+      suggestion: Inspect ArgoCD pods with kubectl -n {{ .Values.argocd_namespace }} get pods.
+    - name: install monitoring
+      id: helm-install-monitoring
+      command: helm
+      args: ["upgrade", "--install", "monitoring", "prometheus-community/kube-prometheus-stack", "-n", "{{ .Values.monitoring_namespace }}", "--create-namespace", "-f", "generated/helm-values/kube-prometheus-stack-values.yaml", "--wait", "--timeout", "15m"]
+      timeout_seconds: 1200
+      suggestion: Inspect monitoring pods with kubectl -n {{ .Values.monitoring_namespace }} get pods.
+    - name: install ingress-nginx
+      id: helm-install-ingress
+      command: helm
+      args: ["upgrade", "--install", "ingress-nginx", "ingress-nginx/ingress-nginx", "-n", "{{ .Values.ingress_namespace }}", "--create-namespace", "-f", "generated/helm-values/ingress-nginx-values.yaml", "--wait", "--timeout", "10m"]
+      timeout_seconds: 900
+      suggestion: Inspect ingress-nginx pods with kubectl -n {{ .Values.ingress_namespace }} get pods.
+  destroy:
+    - name: terraform init
+      id: terraform-init-destroy
+      command: terraform
+      dir: generated/terraform
+      args: ["init"]
+      timeout_seconds: 900
+      suggestion: Check network access to Terraform registry and provider downloads.
     - name: terraform destroy
+      id: terraform-destroy
       command: terraform
       dir: generated/terraform
       args: ["destroy", "-auto-approve"]
+      timeout_seconds: 3600
+      suggestion: Check AWS credentials, dependencies such as LoadBalancer services, and Terraform state locks.
 
 outputs:
   success:
@@ -326,3 +391,8 @@ outputs:
     - "Check pods: kubectl get pods -A"
     - "ArgoCD: kubectl -n {{ .Values.argocd_namespace }} port-forward svc/argocd-server 8080:443"
     - "Grafana: kubectl -n {{ .Values.monitoring_namespace }} port-forward svc/monitoring-grafana 3000:80"
+  notes:
+    - "This template creates billable AWS resources. Run platformctl destroy when the environment is no longer needed."
+  next_steps:
+    - "Run platformctl status to inspect local state."
+    - "Run kubectl get nodes to verify cluster access."

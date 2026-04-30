@@ -4,6 +4,6 @@ template:
 
 values:
   project_name: demo
-  aws_region: eu-central-1
+  region: eu-central-1
   aws_profile: default
   cluster_name: demo-platform

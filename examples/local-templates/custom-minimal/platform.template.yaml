@@ -1,0 +1,52 @@
+apiVersion: platformctl.io/v1alpha2
+kind: PlatformTemplate
+metadata:
+  name: custom-minimal
+  description: Minimal local template showing how to build a custom platform blueprint.
+  tags: [custom, example]
+  maintainer: platformctl
+
+inputs:
+  project_name:
+    description: Name rendered into the generated custom README.
+    type: string
+    required: true
+    default: demo
+    example: demo
+
+requirements:
+  tools:
+    - name: echo
+
+files:
+  - path: generated/custom/README.md
+    source: files/README.md.tmpl
+
+steps:
+  plan:
+    - name: show generated custom files
+      id: show-generated-files
+      command: echo
+      args: ["custom platform files will be rendered under generated/custom"]
+      timeout_seconds: 30
+      suggestion: Verify that generated/custom is writable.
+  apply:
+    - name: apply custom minimal platform
+      id: apply-custom-minimal
+      command: echo
+      args: ["platform {{ .Values.project_name }} is ready"]
+      timeout_seconds: 30
+      suggestion: This example uses echo; inspect generated/custom/README.md if output is unexpected.
+  destroy:
+    - name: destroy custom minimal platform
+      id: destroy-custom-minimal
+      command: echo
+      args: ["platform {{ .Values.project_name }} removed"]
+      timeout_seconds: 30
+      suggestion: This example uses echo and has no external resources to clean up.
+
+outputs:
+  success:
+    - "Custom platform {{ .Values.project_name }} finished."
+  next_steps:
+    - "Open generated/custom/README.md to inspect rendered local template output."

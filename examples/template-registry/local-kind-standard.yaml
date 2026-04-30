@@ -1,25 +1,43 @@
-apiVersion: platformctl.io/v1
+apiVersion: platformctl.io/v1alpha2
 kind: PlatformTemplate
-name: local-kind-standard
-description: Local Kind developer platform with ArgoCD, monitoring, and ingress.
+metadata:
+  name: local-kind-standard
+  description: Local Kind developer platform with ArgoCD, monitoring, and ingress.
+  tags: [local, kind, kubernetes, gitops, monitoring]
+  maintainer: platformctl
 
 requirements:
   tools:
     - name: docker
+      version_args: ["--version"]
       install_hint: https://docs.docker.com/get-docker/
     - name: kind
+      version: "v0.24.0"
+      version_args: ["version"]
       install_hint: https://kind.sigs.k8s.io/docs/user/quick-start/
     - name: kubectl
+      version: "v1.34.0"
+      version_args: ["version", "--client"]
       install_hint: https://kubernetes.io/docs/tasks/tools/
     - name: helm
+      version: "v3.18.6"
+      version_args: ["version", "--short"]
       install_hint: https://helm.sh/docs/intro/install/
 
 inputs:
   project_name:
+    description: Project identifier used in generated labels and messages.
+    type: string
     required: true
+    example: demo
+    validation: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
   cluster_name:
+    description: Kind cluster name; must be a valid lowercase DNS label.
+    type: string
     required: true
     default: platformctl-local
+    example: demo-local
+    validation: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
 
 defaults:
   argocd_namespace: argocd
@@ -39,12 +57,6 @@ defaults:
       memory: "8Gi"
       default_cpu: "500m"
       default_memory: "512Mi"
-    - name: production
-      namespace: production
-      cpu: "8"
-      memory: "16Gi"
-      default_cpu: "1"
-      default_memory: "1Gi"
 
 files:
   - path: generated/kind/config.yaml
@@ -68,6 +80,9 @@ files:
       kind: Namespace
       metadata:
         name: {{ .namespace }}
+        labels:
+          platformctl.io/environment: {{ .name }}
+          platformctl.io/managed: "true"
       ---
       apiVersion: v1
       kind: ResourceQuota
@@ -80,21 +95,6 @@ files:
           requests.memory: "{{ .memory }}"
           limits.cpu: "{{ .cpu }}"
           limits.memory: "{{ .memory }}"
-      ---
-      apiVersion: v1
-      kind: LimitRange
-      metadata:
-        name: {{ .namespace }}-limits
-        namespace: {{ .namespace }}
-      spec:
-        limits:
-          - type: Container
-            default:
-              cpu: "{{ .default_cpu }}"
-              memory: "{{ .default_memory }}"
-            defaultRequest:
-              cpu: "{{ .default_cpu }}"
-              memory: "{{ .default_memory }}"
       {{- end }}
   - path: generated/helm-values/argocd-values.yaml
     content: |
@@ -111,39 +111,76 @@ files:
         service:
           type: NodePort
 
-workflow:
-  up:
+steps:
+  plan:
+    - name: kind cluster dry-run
+      id: kind-dry-run
+      command: kind
+      args: ["create", "cluster", "--name", "{{ .Values.cluster_name }}", "--config", "generated/kind/config.yaml", "--dry-run"]
+      timeout_seconds: 120
+      suggestion: Verify Docker is running and the generated Kind config is valid.
+  apply:
     - name: kind create cluster
+      id: kind-create
       command: kind
       args: ["create", "cluster", "--name", "{{ .Values.cluster_name }}", "--config", "generated/kind/config.yaml"]
+      timeout_seconds: 900
+      suggestion: If the cluster already exists, use platformctl destroy or choose another cluster_name.
     - name: helm repo add argo
+      id: helm-repo-argo
       command: helm
       args: ["repo", "add", "argo", "https://argoproj.github.io/argo-helm", "--force-update"]
+      timeout_seconds: 120
+      suggestion: Check network access to the Argo Helm repository.
     - name: helm repo add prometheus-community
+      id: helm-repo-prometheus
       command: helm
       args: ["repo", "add", "prometheus-community", "https://prometheus-community.github.io/helm-charts", "--force-update"]
+      timeout_seconds: 120
+      suggestion: Check network access to the Prometheus Community Helm repository.
     - name: helm repo add ingress-nginx
+      id: helm-repo-ingress
       command: helm
       args: ["repo", "add", "ingress-nginx", "https://kubernetes.github.io/ingress-nginx", "--force-update"]
+      timeout_seconds: 120
+      suggestion: Check network access to the ingress-nginx Helm repository.
     - name: helm repo update
+      id: helm-repo-update
       command: helm
       args: ["repo", "update"]
+      timeout_seconds: 300
+      suggestion: Check network access and retry after the Helm repository index is reachable.
     - name: kubectl apply platform manifests
+      id: kubectl-apply-manifests
       command: kubectl
       args: ["apply", "-f", "generated/kubernetes"]
+      timeout_seconds: 300
+      suggestion: Verify the Kind cluster is reachable with kubectl cluster-info.
     - name: install ArgoCD
+      id: helm-install-argocd
       command: helm
-      args: ["upgrade", "--install", "argocd", "argo/argo-cd", "-n", "{{ .Values.argocd_namespace }}", "--create-namespace", "-f", "generated/helm-values/argocd-values.yaml"]
+      args: ["upgrade", "--install", "argocd", "argo/argo-cd", "-n", "{{ .Values.argocd_namespace }}", "--create-namespace", "-f", "generated/helm-values/argocd-values.yaml", "--wait", "--timeout", "10m"]
+      timeout_seconds: 900
+      suggestion: Inspect ArgoCD pods with kubectl -n {{ .Values.argocd_namespace }} get pods.
     - name: install monitoring
+      id: helm-install-monitoring
       command: helm
-      args: ["upgrade", "--install", "monitoring", "prometheus-community/kube-prometheus-stack", "-n", "{{ .Values.monitoring_namespace }}", "--create-namespace", "-f", "generated/helm-values/kube-prometheus-stack-values.yaml"]
+      args: ["upgrade", "--install", "monitoring", "prometheus-community/kube-prometheus-stack", "-n", "{{ .Values.monitoring_namespace }}", "--create-namespace", "-f", "generated/helm-values/kube-prometheus-stack-values.yaml", "--wait", "--timeout", "15m"]
+      timeout_seconds: 1200
+      suggestion: Inspect monitoring pods with kubectl -n {{ .Values.monitoring_namespace }} get pods.
     - name: install ingress-nginx
+      id: helm-install-ingress
       command: helm
-      args: ["upgrade", "--install", "ingress-nginx", "ingress-nginx/ingress-nginx", "-n", "{{ .Values.ingress_namespace }}", "--create-namespace", "-f", "generated/helm-values/ingress-nginx-values.yaml"]
-  down:
+      args: ["upgrade", "--install", "ingress-nginx", "ingress-nginx/ingress-nginx", "-n", "{{ .Values.ingress_namespace }}", "--create-namespace", "-f", "generated/helm-values/ingress-nginx-values.yaml", "--wait", "--timeout", "10m"]
+      timeout_seconds: 900
+      suggestion: Inspect ingress-nginx pods with kubectl -n {{ .Values.ingress_namespace }} get pods.
+  destroy:
     - name: kind delete cluster
+      id: kind-delete
       command: kind
       args: ["delete", "cluster", "--name", "{{ .Values.cluster_name }}"]
+      timeout_seconds: 300
+      suggestion: If Kind cannot delete the cluster, inspect docker containers with docker ps -a.
 
 outputs:
   success:
@@ -151,3 +188,6 @@ outputs:
     - "Check pods: kubectl get pods -A"
     - "ArgoCD: kubectl -n {{ .Values.argocd_namespace }} port-forward svc/argocd-server 8080:443"
     - "Grafana: kubectl -n {{ .Values.monitoring_namespace }} port-forward svc/monitoring-grafana 3000:80"
+  next_steps:
+    - "Run platformctl status to inspect local state."
+    - "Use platformctl destroy when the local cluster is no longer needed."

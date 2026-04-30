@@ -1,91 +1,55 @@
 # platformctl
 
-`platformctl` is a simple template-driven bootstrapper for creating developer platforms.
+`platformctl` is a platform bootstrap engine for creating developer platforms quickly from declarative blueprints.
 
-It is not a replacement for Terraform, Helm, kubectl, AWS CLI, Azure CLI, Kind, or other platform tools. It is a small engine that downloads a platform template, renders the files declared by that template, and runs the workflow declared by that template.
+It is not a CI/CD system and it is not a replacement for Terraform, Helm, kubectl, AWS CLI, Kind, or other platform tools. It resolves a platform template, validates inputs, renders declared files, shows an execution plan, and runs controlled platform workflows with local state and resumable checkpoints.
 
-Templates can target different environments:
-
-- `platformctl/aws-eks-standard`
-- `platformctl/azure-aks-standard`
-- `platformctl/local-kind-standard`
-
-This MVP does not deploy application workloads yet. The next layer can add app commands for Docker image builds, chart generation, registry push, and ArgoCD based deployment.
-
-## Commands
-
-The public CLI is intentionally small:
+## Core Workflow
 
 ```bash
-platformctl check
-platformctl validate
-platformctl up
-platformctl down
+platformctl init --template platformctl/local-kind-standard --project demo
+platformctl preflight
+platformctl plan
+platformctl apply
+platformctl status
+platformctl destroy
 ```
 
-`platformctl` always reads `platform.yaml` from the current directory. The file points at a remote template manifest and provides only the values that should be different from the template defaults.
-
-## Requirements
-
-Install the tools required by the selected template. For the AWS template:
-
-- Terraform
-- AWS CLI
-- kubectl
-- Helm
-
-Go is needed only when building `platformctl` from source.
-
-Check your machine:
+Backward-compatible aliases are still available:
 
 ```bash
-./platformctl check
+platformctl up      # alias for apply
+platformctl down    # alias for destroy
 ```
 
-Also check Go:
+`platformctl init` creates `platform.yaml`, validates the selected template, installs supported pinned tools into `~/.platformctl/bin`, and runs a non-blocking preflight for required tools and credentials. `platformctl preflight` (alias: `doctor`) checks dependencies, credentials, local write access, Docker readiness when required, and Kubernetes context when required. `platformctl plan` renders files under `generated/`, prints the steps that would be run, and writes `.platformctl/state.json`. `platformctl apply` asks for confirmation unless `--yes` is provided. If a workflow fails after some steps completed, fix the problem and run:
 
 ```bash
-./platformctl check --dev
+platformctl apply --resume
 ```
 
-On macOS with Homebrew, install missing runtime dependencies:
+Useful global flags:
 
 ```bash
-./platformctl check --install
+platformctl plan --json
+platformctl apply --yes --json
+platformctl status --json
+platformctl apply --verbose
+platformctl plan --quiet
 ```
 
-The AWS resources created by this project can generate costs, especially EKS, NAT Gateway, EC2 worker nodes, EBS volumes, and LoadBalancer services.
+`--json` is intended for automation. Destructive commands require `--yes` with `--json` so prompts do not corrupt machine-readable output. `--verbose` includes the wrapped technical cause for failures.
 
-## AWS Credentials
+## Templates
 
-Configure AWS credentials before running `up`.
+Templates can come from:
 
-```bash
-aws configure --profile default
-aws sts get-caller-identity --profile default
-```
+- Registry reference: `platformctl/aws-eks-standard` with `version: v1.0.0`
+- Inline registry version: `platformctl/local-kind-standard@v1.0.0`
+- Direct URL: `https://example.com/platform.template.yaml`
+- Local directory: `./examples/local-templates/custom-minimal`
 
-The profile and region are read from `platform.yaml` values:
-
-```yaml
-template:
-  source: platformctl/aws-eks-standard
-  version: v1.0.0
-
-values:
-  aws_region: eu-central-1
-  aws_profile: default
-```
-
-## Configure
-
-Start from the example config:
-
-```bash
-cp examples/platform.yaml platform.yaml
-```
-
-The default `platform.yaml` is intentionally short:
+Example `platform.yaml`:
 
 ```yaml
 template:
@@ -94,207 +58,138 @@ template:
 
 values:
   project_name: demo
-  aws_region: eu-central-1
+  region: eu-central-1
   aws_profile: default
   cluster_name: demo-platform
 ```
 
-The selected template provides the rest of the platform defaults and workflow.
-
-Edit `platform.yaml` if you want to change the project name, AWS region, AWS profile, cluster name, Kubernetes version, node size, or node count.
-
-The example uses EKS Kubernetes `1.34`, which is in standard support at the time this MVP was written.
-
-## Templates
-
-Templates are external YAML manifests loaded from a registry-style source.
+Local template example:
 
 ```yaml
 template:
-  source: platformctl/aws-eks-standard
-  version: v1.0.0
+  source: ./examples/local-templates/custom-minimal
+
+values:
+  project_name: demo
 ```
 
-This is intentionally closer to Terraform modules or Helm chart repositories: the CLI does not hardcode provider-specific platform logic. It resolves the registry reference to a remote template manifest, downloads it, caches it under `~/.platformctl/templates`, merges template defaults with user values, renders files declared by the template, and runs the workflow declared by the template.
+A local template directory contains `platform.template.yaml` and may include `files/`, `partials/`, or `docs/`. Template-rendered output is restricted to `generated/`.
 
-The built-in registry namespace currently resolves like this:
+## Template Manifest
 
-```text
-platformctl/aws-eks-standard@v1.0.0
-  -> https://raw.githubusercontent.com/GCICHON-DEV/platformctl-templates/v1.0.0/aws-eks-standard.yaml
-```
-
-For local testing or private hosting, override the registry base URL:
-
-```bash
-export PLATFORMCTL_TEMPLATE_REGISTRY_URL=http://localhost:8765
-```
-
-Full HTTP/HTTPS URLs are also supported in `template.source` for direct template manifests.
-
-The repo includes example template manifests under [examples/template-registry](examples/template-registry):
-
-- `aws-eks-standard.yaml`
-- `azure-aks-standard.yaml`
-- `local-kind-standard.yaml`
-
-A template manifest can define:
-
-- required input values
-- default values
-- required local tools
-- files to render into `generated/`
-- the `up` workflow
-- the `down` workflow
-- success messages
-
-Minimal shape:
+The current manifest contract is `platformctl.io/v1alpha2`:
 
 ```yaml
-apiVersion: platformctl.io/v1
+apiVersion: platformctl.io/v1alpha2
 kind: PlatformTemplate
-name: my-template
-
-requirements:
-  tools:
-    - name: terraform
-    - name: kubectl
+metadata:
+  name: custom-minimal
+  description: Minimal custom platform blueprint.
+  tags: [custom]
+  maintainer: platformctl
 
 inputs:
   project_name:
+    description: Project identifier used in generated files.
+    type: string
     required: true
+    default: demo
+    example: demo
 
-defaults:
-  cluster_name: demo
+requirements:
+  tools:
+    - name: echo
 
 files:
-  - path: generated/example.txt
-    content: |
-      project={{ .Values.project_name }}
+  - path: generated/custom/README.md
+    source: files/README.md.tmpl
 
-workflow:
-  up:
-    - name: example
+steps:
+  plan:
+    - name: show generated files
+      id: show-generated-files
       command: echo
-      args: ["hello", "{{ .Values.project_name }}"]
-  down:
-    - name: cleanup
+      args: ["generated files are ready"]
+      timeout_seconds: 30
+      suggestion: Verify generated/ is writable.
+  apply:
+    - name: apply platform
+      id: apply-platform
       command: echo
-      args: ["bye"]
+      args: ["platform {{ .Values.project_name }} is ready"]
+      timeout_seconds: 30
+      suggestion: Inspect generated output and retry with platformctl apply --resume.
+  destroy:
+    - name: destroy platform
+      id: destroy-platform
+      command: echo
+      args: ["platform {{ .Values.project_name }} removed"]
+      timeout_seconds: 30
+      suggestion: This template has no external resources to clean up.
 ```
 
-All template-rendered files must be written under `generated/`.
+Legacy `workflow.up` and `workflow.down` templates still load as compatibility aliases for `steps.apply` and `steps.destroy`.
 
-## Secrets
+## Built-in Blueprint Examples
 
-Do not put secrets in `platform.yaml`, templates, or generated files.
+The repo includes registry-style examples under `examples/template-registry`:
 
-Current platform secrets are handled outside the config:
+- `aws-eks-standard.yaml`: Terraform EKS, kubeconfig, ArgoCD, monitoring, and ingress.
+- `local-kind-standard.yaml`: Kind cluster, ArgoCD, monitoring, and ingress.
+- `azure-aks-standard.yaml`: AKS reference blueprint, outside the first supported AWS+local target.
 
-- AWS credentials come from AWS CLI profiles such as `~/.aws/credentials`.
-- ArgoCD and Grafana generate Kubernetes `Secret` objects during installation.
-- Application secrets are not implemented yet.
+The repo also includes a local custom template under `examples/local-templates/custom-minimal`.
 
-The intended future direction for app secrets is AWS Secrets Manager plus External Secrets Operator. In that model, Git and ArgoCD contain only references to secrets, not secret values.
+## Safety Model
 
-## Build
+- Supported pinned tools are installed under `~/.platformctl/bin` and preferred over global PATH.
+- Workflow steps can run only in the workspace root or under `generated/`.
+- Workflow steps use a single executable plus explicit args; shell expressions are rejected.
+- Steps have stable IDs, timeouts, optional retries, optional preflight metadata, and failure suggestions.
+- Logs mask common `password=`, `secret=`, `token=`, and `key=` assignments.
+- Local state is stored in `.platformctl/state.json`.
+- State writes are atomic and `apply`/`destroy` create `.platformctl/lock` to prevent concurrent workflows.
+- `apply`/`destroy` warn when the current template checksum or generated files differ from the last recorded plan.
+- `apply` and `destroy` require interactive confirmation unless `--yes` is passed.
+
+## Managed Toolchain
+
+Templates can pin supported tool versions:
+
+```yaml
+requirements:
+  tools:
+    - name: terraform
+      version: "1.5.7"
+    - name: helm
+      version: "v3.18.6"
+    - name: kubectl
+      version: "v1.34.0"
+```
+
+`platformctl init` and `platformctl plan` install missing supported tools into `~/.platformctl/bin`. `platformctl apply` and `platformctl destroy` use that directory before the global PATH. Supported managed tools are Terraform, Helm, kubectl, and Kind. Tools such as Docker and AWS CLI are checked but not installed automatically.
+
+## AWS Notes
+
+The AWS EKS template can create billable resources, including EKS, NAT Gateway, EC2 worker nodes, EBS volumes, and LoadBalancer services.
+
+Configure credentials before running `apply`:
+
+```bash
+aws configure --profile default
+aws sts get-caller-identity --profile default
+```
+
+## Build And Test
 
 ```bash
 go mod tidy
+go test ./...
+go test -race ./...
 go build -o platformctl .
 ```
 
-## Validate
+## More Documentation
 
-```bash
-./platformctl validate
-```
-
-This checks `platform.yaml` and reports configuration problems before any AWS resources are created.
-
-## Create The Platform
-
-```bash
-./platformctl check
-./platformctl validate
-./platformctl up
-```
-
-`up` performs these steps:
-
-1. Loads and validates `platform.yaml`.
-2. Checks the tools required by the selected template.
-3. Generates files declared by the selected template into `generated/`.
-4. Runs the selected template's `workflow.up` steps.
-
-## Verify
-
-```bash
-kubectl get nodes
-kubectl get ns
-kubectl get pods -A
-```
-
-## ArgoCD Access
-
-```bash
-kubectl -n argocd port-forward svc/argocd-server 8080:443
-kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
-```
-
-Open:
-
-```text
-https://localhost:8080
-```
-
-The default username is `admin`.
-
-## Grafana Access
-
-```bash
-kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80
-kubectl -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d; echo
-```
-
-Open:
-
-```text
-http://localhost:3000
-```
-
-The default username comes from the selected template or `values.grafana_admin_user`.
-
-## Destroy
-
-```bash
-./platformctl down
-```
-
-`down` regenerates files from the selected template and runs the selected template's `workflow.down` steps.
-
-## What Happens Under The Hood
-
-- AWS templates can use Terraform modules, AWS CLI, kubectl, and Helm.
-- Azure templates can use Terraform AzureRM, Azure CLI, kubectl, and Helm.
-- Local templates can use Docker, Kind, kubectl, and Helm.
-
-You do not need to run these steps manually for the MVP workflow.
-
-## Roadmap
-
-Future app-level commands can build on this platform:
-
-```bash
-platformctl app init
-platformctl app build
-platformctl app deploy --env dev
-```
-
-The intended direction is Docker image build, ECR push, Helm chart or values generation, ArgoCD `Application` generation, and GitOps based deployment to the platform created by `platformctl up`.
-
-## Notes
-
-- Terraform backend support is intentionally limited to local state for the MVP.
-- `cert-manager`, `external-dns`, and AWS Load Balancer Controller are represented as configuration placeholders. Setting them to `true` is rejected until those addons are implemented.
-- No secrets are written by the CLI.
+- Template authoring guide: [docs/template-authoring.md](docs/template-authoring.md)
+- Troubleshooting guide: [docs/troubleshooting.md](docs/troubleshooting.md)

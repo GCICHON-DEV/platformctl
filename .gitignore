@@ -4,6 +4,7 @@ platformctl
 *.secret.yaml
 secrets.yaml
 generated/
+.platformctl/
 .terraform/
 .terraform.lock.hcl
 terraform.tfstate

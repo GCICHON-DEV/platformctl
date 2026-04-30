@@ -1,71 +1,58 @@
-apiVersion: platformctl.io/v1
+apiVersion: platformctl.io/v1alpha2
 kind: PlatformTemplate
-name: azure-aks-standard
-description: Standard Azure AKS developer platform with ArgoCD, monitoring, and ingress.
+metadata:
+  name: azure-aks-standard
+  description: Azure AKS example blueprint kept as a compatibility reference.
+  tags: [azure, aks, terraform]
+  maintainer: platformctl
 
 requirements:
+  warnings:
+    - This AKS template is an example blueprint and is not part of the first supported AWS+local target.
+  credentials:
+    - name: azure
+      description: Azure CLI must be logged in and pointed at the target subscription.
+      command: az account show
   tools:
     - name: terraform
+      version: "1.5.7"
+      min_version: "1.5.7"
+      version_args: ["version"]
       install_hint: https://developer.hashicorp.com/terraform/install
     - name: az
+      version_args: ["version"]
       install_hint: https://learn.microsoft.com/cli/azure/install-azure-cli
     - name: kubectl
+      version: "v1.34.0"
+      version_args: ["version", "--client"]
       install_hint: https://kubernetes.io/docs/tasks/tools/
-    - name: helm
-      install_hint: https://helm.sh/docs/intro/install/
 
 inputs:
   project_name:
+    description: Project identifier used for Azure resource names.
+    type: string
     required: true
-  azure_location:
+    example: demo
+    validation: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+  region:
+    description: Azure region for the resource group and AKS cluster.
+    type: string
     required: true
     default: westeurope
-  resource_group:
-    required: true
+    example: westeurope
   cluster_name:
+    description: AKS cluster name.
+    type: string
     required: true
-  kubernetes_version:
-    required: false
-    default: "1.30"
-  node_vm_size:
-    required: false
-    default: Standard_B2s
-  node_count:
-    required: false
-    default: 2
-
-defaults:
-  environment_prefix: platform
-  argocd_namespace: argocd
-  monitoring_namespace: monitoring
-  grafana_admin_user: admin
-  ingress_namespace: ingress-nginx
-  environments:
-    - name: dev
-      namespace: dev
-      cpu: "2"
-      memory: "4Gi"
-      default_cpu: "500m"
-      default_memory: "512Mi"
-    - name: staging
-      namespace: staging
-      cpu: "4"
-      memory: "8Gi"
-      default_cpu: "500m"
-      default_memory: "512Mi"
-    - name: production
-      namespace: production
-      cpu: "8"
-      memory: "16Gi"
-      default_cpu: "1"
-      default_memory: "1Gi"
+    default: platformctl-aks
+    example: demo-aks
+    validation: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
 
 files:
-  - path: generated/terraform/versions.tf
+  - path: generated/terraform/main.tf
     content: |
       terraform {
         required_version = ">= 1.5.7"
-
         required_providers {
           azurerm = {
             source  = "hashicorp/azurerm"
@@ -77,153 +64,77 @@ files:
       provider "azurerm" {
         features {}
       }
-  - path: generated/terraform/main.tf
-    content: |
-      resource "azurerm_resource_group" "this" {
-        name     = "{{ .Values.resource_group }}"
-        location = "{{ .Values.azure_location }}"
 
-        tags = {
-          Project   = "{{ .Values.project_name }}"
-          ManagedBy = "platformctl"
-        }
+      resource "azurerm_resource_group" "platform" {
+        name     = "{{ .Values.project_name }}-rg"
+        location = "{{ .Values.region }}"
       }
 
-      resource "azurerm_kubernetes_cluster" "this" {
+      resource "azurerm_kubernetes_cluster" "platform" {
         name                = "{{ .Values.cluster_name }}"
-        location            = azurerm_resource_group.this.location
-        resource_group_name = azurerm_resource_group.this.name
-        dns_prefix          = "{{ .Values.cluster_name }}"
-        kubernetes_version  = "{{ .Values.kubernetes_version }}"
+        location            = azurerm_resource_group.platform.location
+        resource_group_name = azurerm_resource_group.platform.name
+        dns_prefix          = "{{ .Values.project_name }}"
 
         default_node_pool {
-          name       = "general"
-          node_count = {{ .Values.node_count }}
-          vm_size    = "{{ .Values.node_vm_size }}"
+          name       = "system"
+          node_count = 1
+          vm_size    = "Standard_B2s"
         }
 
         identity {
           type = "SystemAssigned"
         }
-
-        tags = {
-          Project   = "{{ .Values.project_name }}"
-          ManagedBy = "platformctl"
-        }
       }
-  - path: generated/terraform/outputs.tf
-    content: |
+
       output "cluster_name" {
-        value = azurerm_kubernetes_cluster.this.name
+        value = azurerm_kubernetes_cluster.platform.name
       }
 
-      output "resource_group" {
-        value = azurerm_resource_group.this.name
-      }
-  - path: generated/kubernetes/environments.yaml
-    content: |
-      {{- range .Values.environments }}
-      ---
-      apiVersion: v1
-      kind: Namespace
-      metadata:
-        name: {{ .namespace }}
-      ---
-      apiVersion: v1
-      kind: ResourceQuota
-      metadata:
-        name: {{ .namespace }}-quota
-        namespace: {{ .namespace }}
-      spec:
-        hard:
-          requests.cpu: "{{ .cpu }}"
-          requests.memory: "{{ .memory }}"
-          limits.cpu: "{{ .cpu }}"
-          limits.memory: "{{ .memory }}"
-      ---
-      apiVersion: v1
-      kind: LimitRange
-      metadata:
-        name: {{ .namespace }}-limits
-        namespace: {{ .namespace }}
-      spec:
-        limits:
-          - type: Container
-            default:
-              cpu: "{{ .default_cpu }}"
-              memory: "{{ .default_memory }}"
-            defaultRequest:
-              cpu: "{{ .default_cpu }}"
-              memory: "{{ .default_memory }}"
-      {{- end }}
-  - path: generated/helm-values/argocd-values.yaml
-    content: |
-      configs:
-        params:
-          server.insecure: true
-  - path: generated/helm-values/kube-prometheus-stack-values.yaml
-    content: |
-      grafana:
-        adminUser: "{{ .Values.grafana_admin_user }}"
-  - path: generated/helm-values/ingress-nginx-values.yaml
-    content: |
-      controller:
-        service:
-          type: LoadBalancer
-
-workflow:
-  up:
-    - name: terraform init
-      command: terraform
-      dir: generated/terraform
-      args: ["init"]
+steps:
+  plan:
     - name: terraform plan
+      id: terraform-plan
       command: terraform
       dir: generated/terraform
       args: ["plan"]
-    - name: terraform apply
-      command: terraform
-      dir: generated/terraform
-      args: ["apply", "-auto-approve"]
-    - name: az aks get-credentials
-      command: az
-      args: ["aks", "get-credentials", "--resource-group", "{{ .Values.resource_group }}", "--name", "{{ .Values.cluster_name }}", "--overwrite-existing"]
-    - name: helm repo add argo
-      command: helm
-      args: ["repo", "add", "argo", "https://argoproj.github.io/argo-helm", "--force-update"]
-    - name: helm repo add prometheus-community
-      command: helm
-      args: ["repo", "add", "prometheus-community", "https://prometheus-community.github.io/helm-charts", "--force-update"]
-    - name: helm repo add ingress-nginx
-      command: helm
-      args: ["repo", "add", "ingress-nginx", "https://kubernetes.github.io/ingress-nginx", "--force-update"]
-    - name: helm repo update
-      command: helm
-      args: ["repo", "update"]
-    - name: kubectl apply platform manifests
-      command: kubectl
-      args: ["apply", "-f", "generated/kubernetes"]
-    - name: install ArgoCD
-      command: helm
-      args: ["upgrade", "--install", "argocd", "argo/argo-cd", "-n", "{{ .Values.argocd_namespace }}", "--create-namespace", "-f", "generated/helm-values/argocd-values.yaml"]
-    - name: install monitoring
-      command: helm
-      args: ["upgrade", "--install", "monitoring", "prometheus-community/kube-prometheus-stack", "-n", "{{ .Values.monitoring_namespace }}", "--create-namespace", "-f", "generated/helm-values/kube-prometheus-stack-values.yaml"]
-    - name: install ingress-nginx
-      command: helm
-      args: ["upgrade", "--install", "ingress-nginx", "ingress-nginx/ingress-nginx", "-n", "{{ .Values.ingress_namespace }}", "--create-namespace", "-f", "generated/helm-values/ingress-nginx-values.yaml"]
-  down:
+      timeout_seconds: 1800
+      suggestion: Check Azure credentials, subscription selection, and Terraform provider errors.
+  apply:
     - name: terraform init
+      id: terraform-init
       command: terraform
       dir: generated/terraform
       args: ["init"]
+      timeout_seconds: 900
+      suggestion: Check network access to Terraform registry and provider downloads.
+    - name: terraform apply
+      id: terraform-apply
+      command: terraform
+      dir: generated/terraform
+      args: ["apply", "-auto-approve"]
+      timeout_seconds: 3600
+      suggestion: Check Azure credentials, quota, and Terraform provider errors.
+  destroy:
+    - name: terraform init
+      id: terraform-init-destroy
+      command: terraform
+      dir: generated/terraform
+      args: ["init"]
+      timeout_seconds: 900
+      suggestion: Check network access to Terraform registry and provider downloads.
     - name: terraform destroy
+      id: terraform-destroy
       command: terraform
       dir: generated/terraform
       args: ["destroy", "-auto-approve"]
+      timeout_seconds: 3600
+      suggestion: Check Azure credentials and Terraform state locks.
 
 outputs:
   success:
-    - "Check cluster: kubectl get nodes"
-    - "ArgoCD: kubectl -n {{ .Values.argocd_namespace }} port-forward svc/argocd-server 8080:443"
-    - "Grafana: kubectl -n {{ .Values.monitoring_namespace }} port-forward svc/monitoring-grafana 3000:80"
+    - "AKS resources created. Fetch credentials with az aks get-credentials."
+  notes:
+    - "This AKS template is a reference blueprint and is not part of the primary supported AWS+local target."
+  next_steps:
+    - "Run platformctl status to inspect local state."
