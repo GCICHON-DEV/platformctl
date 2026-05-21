@@ -4,7 +4,7 @@ Templates define the files, requirements, workflow steps, and operator-facing ou
 
 ## Manifest Contract
 
-Use `apiVersion: platformctl.io/v1alpha2` and `kind: PlatformTemplate`.
+Use `apiVersion: platformctl.io/v1beta1` and `kind: PlatformTemplate`.
 
 Required metadata:
 
@@ -30,6 +30,19 @@ inputs:
 ```
 
 Supported input types are `string`, `integer`, `number`, `boolean`, `array`, and `object`.
+
+## Credential Checks
+
+Credential checks are structured and do not run through a shell. Define a single executable name in `command` and explicit tokens in `args`.
+
+```yaml
+requirements:
+  credentials:
+    - name: aws
+      description: AWS profile must be valid.
+      command: aws
+      args: ["sts", "get-caller-identity", "--profile", "{{ .Values.aws_profile }}"]
+```
 
 ## Files
 

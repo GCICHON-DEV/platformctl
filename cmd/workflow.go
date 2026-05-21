@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -61,4 +64,13 @@ func workflowStdout(stdout, stderr io.Writer) io.Writer {
 		return stderr
 	}
 	return stdout
+}
+
+func executionPlanHash(plan *templateengine.ExecutionPlan) (string, error) {
+	data, err := json.Marshal(plan)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }

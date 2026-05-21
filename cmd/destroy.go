@@ -49,7 +49,7 @@ func newDestroyCmd() *cobra.Command {
 			}
 			planWarnings := warnIfPlanChanged(resolved, st)
 			printPlanWarnings(cmd.OutOrStdout(), planWarnings)
-			written, err := resolved.Generate()
+			written, err := resolved.GenerateWithPrevious(st.ManagedFiles)
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_GENERATE_FAILED", "could not render generated files")
 			}
@@ -58,6 +58,10 @@ func newDestroyCmd() *cobra.Command {
 				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_PLAN_BUILD_FAILED", "could not build execution plan")
 			}
 			plan.GeneratedFiles = written
+			planHash, err := executionPlanHash(plan)
+			if err != nil {
+				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_PLAN_HASH", "could not hash execution plan")
+			}
 			if !options.JSON {
 				printSteps(cmd.OutOrStdout(), "Destroy steps", plan.DestroySteps)
 			}
@@ -77,6 +81,12 @@ func newDestroyCmd() *cobra.Command {
 					return nil
 				}
 			}
+			if resume && st.LastPlanHash != "" && st.LastPlanHash != planHash {
+				return apperror.WithRemediation(
+					apperror.New(apperror.CategoryState, "PLATFORMCTL_RESUME_INVALID", "destroy --resume cannot continue because the execution plan changed"),
+					"Run platformctl plan, then run platformctl destroy without --resume.",
+				)
+			}
 
 			if !resume || st.LastPhase != "destroy" {
 				state.ResetPhase(st, "destroy")
@@ -89,6 +99,8 @@ func newDestroyCmd() *cobra.Command {
 			st.TemplateVersion = resolved.Info.Version
 			st.TemplateChecksum = resolved.Info.Checksum
 			st.GeneratedHash = hash
+			st.ManagedFiles = written
+			st.LastPlanHash = planHash
 			if err := state.Save(st); err != nil {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_STATE_SAVE", "could not save local state")
 			}

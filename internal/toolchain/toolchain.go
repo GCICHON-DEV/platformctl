@@ -5,6 +5,8 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -105,6 +107,9 @@ func (m *Manager) install(tool templateengine.Tool) error {
 	if err := download(spec.URL, archivePath); err != nil {
 		return err
 	}
+	if err := verifyChecksum(archivePath, spec); err != nil {
+		return err
+	}
 	target := filepath.Join(m.BinDir, executableName(tool.Name))
 	switch spec.Format {
 	case "zip":
@@ -119,9 +124,11 @@ func (m *Manager) install(tool templateengine.Tool) error {
 }
 
 type spec struct {
-	URL        string
-	Format     string
-	BinaryPath string
+	URL          string
+	Format       string
+	BinaryPath   string
+	ChecksumURL  string
+	ChecksumFile string
 }
 
 func downloadSpec(tool templateengine.Tool) (spec, error) {
@@ -136,31 +143,41 @@ func downloadSpec(tool templateengine.Tool) (spec, error) {
 	switch tool.Name {
 	case "terraform":
 		rawVersion := strings.TrimPrefix(version, "v")
+		fileName := fmt.Sprintf("terraform_%s_%s_%s.zip", rawVersion, goos, goarch)
 		return spec{
-			URL:        fmt.Sprintf("https://releases.hashicorp.com/terraform/%s/terraform_%s_%s_%s.zip", rawVersion, rawVersion, goos, goarch),
-			Format:     "zip",
-			BinaryPath: executableName("terraform"),
+			URL:          fmt.Sprintf("https://releases.hashicorp.com/terraform/%s/%s", rawVersion, fileName),
+			Format:       "zip",
+			BinaryPath:   executableName("terraform"),
+			ChecksumURL:  fmt.Sprintf("https://releases.hashicorp.com/terraform/%s/terraform_%s_SHA256SUMS", rawVersion, rawVersion),
+			ChecksumFile: fileName,
 		}, nil
 	case "helm":
 		v := ensureV(version)
+		fileName := fmt.Sprintf("helm-%s-%s-%s.tar.gz", v, goos, goarch)
 		return spec{
-			URL:        fmt.Sprintf("https://get.helm.sh/helm-%s-%s-%s.tar.gz", v, goos, goarch),
-			Format:     "tar.gz",
-			BinaryPath: filepath.ToSlash(filepath.Join(goos+"-"+goarch, executableName("helm"))),
+			URL:          fmt.Sprintf("https://get.helm.sh/%s", fileName),
+			Format:       "tar.gz",
+			BinaryPath:   filepath.ToSlash(filepath.Join(goos+"-"+goarch, executableName("helm"))),
+			ChecksumURL:  fmt.Sprintf("https://get.helm.sh/%s.sha256sum", fileName),
+			ChecksumFile: fileName,
 		}, nil
 	case "kubectl":
 		v := ensureV(version)
 		return spec{
-			URL:        fmt.Sprintf("https://dl.k8s.io/release/%s/bin/%s/%s/%s", v, goos, goarch, executableName("kubectl")),
-			Format:     "binary",
-			BinaryPath: executableName("kubectl"),
+			URL:         fmt.Sprintf("https://dl.k8s.io/release/%s/bin/%s/%s/%s", v, goos, goarch, executableName("kubectl")),
+			Format:      "binary",
+			BinaryPath:  executableName("kubectl"),
+			ChecksumURL: fmt.Sprintf("https://dl.k8s.io/release/%s/bin/%s/%s/%s.sha256", v, goos, goarch, executableName("kubectl")),
 		}, nil
 	case "kind":
 		v := ensureV(version)
+		fileName := fmt.Sprintf("kind-%s-%s", goos, goarch)
 		return spec{
-			URL:        fmt.Sprintf("https://github.com/kubernetes-sigs/kind/releases/download/%s/kind-%s-%s", v, goos, goarch),
-			Format:     "binary",
-			BinaryPath: executableName("kind"),
+			URL:          fmt.Sprintf("https://github.com/kubernetes-sigs/kind/releases/download/%s/%s", v, fileName),
+			Format:       "binary",
+			BinaryPath:   executableName("kind"),
+			ChecksumURL:  fmt.Sprintf("https://github.com/kubernetes-sigs/kind/releases/download/%s/%s.sha256sum", v, fileName),
+			ChecksumFile: fileName,
 		}, nil
 	default:
 		return spec{}, fmt.Errorf("%s is not supported by managed toolchain", tool.Name)
@@ -322,4 +339,79 @@ func writeExecutable(src io.Reader, target string) error {
 		return err
 	}
 	return os.Rename(tmp, target)
+}
+
+func verifyChecksum(path string, spec spec) error {
+	if spec.ChecksumURL == "" {
+		return nil
+	}
+	checksumData, err := downloadBytes(spec.ChecksumURL)
+	if err != nil {
+		return fmt.Errorf("download checksum %s: %w", spec.ChecksumURL, err)
+	}
+	expected, err := extractChecksum(string(checksumData), spec.ChecksumFile)
+	if err != nil {
+		return fmt.Errorf("read checksum for %s: %w", filepath.Base(path), err)
+	}
+	actual, err := fileChecksum(path)
+	if err != nil {
+		return fmt.Errorf("checksum downloaded file %s: %w", path, err)
+	}
+	if !strings.EqualFold(expected, actual) {
+		return fmt.Errorf("checksum mismatch for %s: expected %s got %s", filepath.Base(path), expected, actual)
+	}
+	return nil
+}
+
+func downloadBytes(url string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("unexpected status %s", resp.Status)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+func extractChecksum(content string, fileName string) (string, error) {
+	lines := strings.Split(content, "\n")
+	target := strings.TrimSpace(fileName)
+	for _, line := range lines {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) == 0 {
+			continue
+		}
+		hash := strings.TrimSpace(fields[0])
+		if target == "" && len(hash) == 64 {
+			return strings.ToLower(hash), nil
+		}
+		if len(fields) >= 2 {
+			name := strings.TrimPrefix(strings.TrimSpace(fields[1]), "*")
+			if name == target && len(hash) == 64 {
+				return strings.ToLower(hash), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("checksum entry not found")
+}
+
+func fileChecksum(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	sum := sha256.New()
+	if _, err := io.Copy(sum, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }

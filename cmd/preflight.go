@@ -108,7 +108,15 @@ func runPreflight(cmd *cobra.Command, resolved *templateengine.Resolved, strict 
 		if err != nil {
 			return result, apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_CREDENTIAL_RENDER", "credential check could not be rendered")
 		}
-		check := exec.Command("sh", "-c", command)
+		args := make([]string, 0, len(credential.Args))
+		for _, arg := range credential.Args {
+			rendered, err := resolved.Render(arg)
+			if err != nil {
+				return result, apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_CREDENTIAL_RENDER", "credential check arguments could not be rendered")
+			}
+			args = append(args, rendered)
+		}
+		check := exec.Command(command, args...)
 		check.Env = appendPath("PATH", manager.PathEnv())
 		if err := check.Run(); err != nil {
 			result.OK = false

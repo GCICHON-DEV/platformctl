@@ -36,8 +36,14 @@ func newStatusCmd() *cobra.Command {
 			}
 			printf(cmd, "Checksum:       %s\n", st.TemplateChecksum)
 			printf(cmd, "Generated hash: %s\n", st.GeneratedHash)
+			if st.LastPlanHash != "" {
+				printf(cmd, "Plan hash:      %s\n", st.LastPlanHash)
+			}
 			printf(cmd, "Last phase:     %s\n", st.LastPhase)
 			printf(cmd, "Updated:        %s\n", st.UpdatedAt.Format("2006-01-02 15:04:05 UTC"))
+			if len(st.ManagedFiles) > 0 {
+				printf(cmd, "Managed files:  %d\n", len(st.ManagedFiles))
+			}
 			if len(st.CompletedSteps) > 0 {
 				keys := make([]string, 0, len(st.CompletedSteps))
 				for key := range st.CompletedSteps {

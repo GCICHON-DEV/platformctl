@@ -44,9 +44,9 @@ platformctl plan --quiet
 
 Templates can come from:
 
-- Registry reference: `platformctl/aws-eks-standard` with `version: v1.0.0`
-- Inline registry version: `platformctl/local-kind-standard@v1.0.0`
-- Direct URL: `https://example.com/platform.template.yaml`
+- Registry reference: `platformctl/aws-eks-standard` with `version: v1.1.0`
+- Inline registry version: `platformctl/local-kind-standard@v1.1.0`
+- Direct HTTPS URL: `https://example.com/platform.template.yaml`
 - Local directory: `./examples/local-templates/custom-minimal`
 
 Example `platform.yaml`:
@@ -54,7 +54,7 @@ Example `platform.yaml`:
 ```yaml
 template:
   source: platformctl/aws-eks-standard
-  version: v1.0.0
+  version: v1.1.0
 
 values:
   project_name: demo
@@ -77,10 +77,10 @@ A local template directory contains `platform.template.yaml` and may include `fi
 
 ## Template Manifest
 
-The current manifest contract is `platformctl.io/v1alpha2`:
+The current manifest contract is `platformctl.io/v1beta1`:
 
 ```yaml
-apiVersion: platformctl.io/v1alpha2
+apiVersion: platformctl.io/v1beta1
 kind: PlatformTemplate
 metadata:
   name: custom-minimal
@@ -97,6 +97,11 @@ inputs:
     example: demo
 
 requirements:
+  credentials:
+    - name: aws
+      description: AWS profile must be valid.
+      command: aws
+      args: ["sts", "get-caller-identity", "--profile", "{{ .Values.aws_profile }}"]
   tools:
     - name: echo
 
@@ -145,11 +150,15 @@ The repo also includes a local custom template under `examples/local-templates/c
 - Supported pinned tools are installed under `~/.platformctl/bin` and preferred over global PATH.
 - Workflow steps can run only in the workspace root or under `generated/`.
 - Workflow steps use a single executable plus explicit args; shell expressions are rejected.
+- Credential checks use structured `command` + `args` and are never executed via shell.
 - Steps have stable IDs, timeouts, optional retries, optional preflight metadata, and failure suggestions.
 - Logs mask common `password=`, `secret=`, `token=`, and `key=` assignments.
 - Local state is stored in `.platformctl/state.json`.
 - State writes are atomic and `apply`/`destroy` create `.platformctl/lock` to prevent concurrent workflows.
+- Stale `.platformctl/lock` files are reclaimed automatically when their PID no longer exists.
+- Generated files are reconciled from tracked `managed_files`; `platformctl` no longer deletes the whole `generated/` directory.
 - `apply`/`destroy` warn when the current template checksum or generated files differ from the last recorded plan.
+- `apply --resume` and `destroy --resume` are rejected when the recorded plan hash differs from the current plan.
 - `apply` and `destroy` require interactive confirmation unless `--yes` is passed.
 
 ## Managed Toolchain
@@ -168,6 +177,7 @@ requirements:
 ```
 
 `platformctl init` and `platformctl plan` install missing supported tools into `~/.platformctl/bin`. `platformctl apply` and `platformctl destroy` use that directory before the global PATH. Supported managed tools are Terraform, Helm, kubectl, and Kind. Tools such as Docker and AWS CLI are checked but not installed automatically.
+Downloaded managed tools are verified with SHA256 checksums before installation.
 
 ## AWS Notes
 
@@ -188,6 +198,14 @@ go test ./...
 go test -race ./...
 go build -o platformctl .
 ```
+
+## Release Checklist
+
+- CI green on main and PRs (`go vet ./...`, `go test ./...`, `go test -race ./...`).
+- Manifest examples and docs use `platformctl.io/v1beta1`.
+- Credential checks in templates use structured `command` + `args` (no shell command strings).
+- Resume flows validated (`apply --resume` / `destroy --resume`) with unchanged plan hash.
+- Managed toolchain install path validated with checksum verification.
 
 ## More Documentation
 

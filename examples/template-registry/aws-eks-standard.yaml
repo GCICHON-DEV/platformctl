@@ -1,4 +1,4 @@
-apiVersion: platformctl.io/v1alpha2
+apiVersion: platformctl.io/v1beta1
 kind: PlatformTemplate
 metadata:
   name: aws-eks-standard
@@ -12,7 +12,8 @@ requirements:
   credentials:
     - name: aws
       description: AWS CLI profile must have permission to create EKS, VPC, IAM, EC2, and ELB resources.
-      command: aws sts get-caller-identity --profile {{ .Values.aws_profile }}
+      command: aws
+      args: ["sts", "get-caller-identity", "--profile", "{{ .Values.aws_profile }}"]
   tools:
     - name: terraform
       version: "1.5.7"

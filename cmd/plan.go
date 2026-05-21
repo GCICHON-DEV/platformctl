@@ -30,7 +30,11 @@ func newPlanCmd() *cobra.Command {
 			if _, err := resolved.RenderedFilePaths(); err == nil {
 				printf(cmd, "Rendering generated files under generated/. Existing generated output may be replaced.\n")
 			}
-			written, err := resolved.Generate()
+			st, err := state.Load()
+			if err != nil {
+				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_STATE_LOAD", "could not load local state")
+			}
+			written, err := resolved.GenerateWithPrevious(st.ManagedFiles)
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_GENERATE_FAILED", "could not render generated files")
 			}
@@ -39,17 +43,23 @@ func newPlanCmd() *cobra.Command {
 				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_PLAN_BUILD_FAILED", "could not build execution plan")
 			}
 			plan.GeneratedFiles = written
+			planHash, err := executionPlanHash(plan)
+			if err != nil {
+				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_PLAN_HASH", "could not hash execution plan")
+			}
 			hash, err := resolved.GeneratedHash()
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_GENERATED_HASH", "could not hash generated files")
 			}
-			if err := state.Save(&state.State{
-				TemplateSource:   resolved.Info.Resolved,
-				TemplateVersion:  resolved.Info.Version,
-				TemplateChecksum: resolved.Info.Checksum,
-				GeneratedHash:    hash,
-				LastPhase:        "plan",
-			}); err != nil {
+			st.TemplateSource = resolved.Info.Resolved
+			st.TemplateVersion = resolved.Info.Version
+			st.TemplateChecksum = resolved.Info.Checksum
+			st.GeneratedHash = hash
+			st.ManagedFiles = written
+			st.LastPlanHash = planHash
+			st.LastPhase = "plan"
+			st.CompletedSteps = map[string]bool{}
+			if err := state.Save(st); err != nil {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_STATE_SAVE", "could not save local state")
 			}
 			printExecutionPlan(cmd.OutOrStdout(), plan)

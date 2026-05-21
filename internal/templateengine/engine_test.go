@@ -30,13 +30,23 @@ func TestResolveTemplateSourceRegistryWithInlineVersion(t *testing.T) {
 	}
 }
 
+func TestResolveTemplateSourceRejectsHTTP(t *testing.T) {
+	_, err := ResolveTemplateSource(TemplateSource{Source: "http://example.test/template.yaml"})
+	if err == nil {
+		t.Fatal("ResolveTemplateSource succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "must use https") {
+		t.Fatalf("error = %v, want https validation", err)
+	}
+}
+
 func TestLoadLocalTemplateDirectoryAndGenerateSourceFile(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "template", "files"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(root, "template", LocalManifestName), `
-apiVersion: platformctl.io/v1alpha2
+apiVersion: platformctl.io/v1beta1
 kind: PlatformTemplate
 metadata:
   name: local-test
@@ -99,7 +109,7 @@ values:
 func TestValidateRejectsUnsupportedValuesAndUnsafeGeneratedPath(t *testing.T) {
 	resolved := &Resolved{
 		Manifest: Manifest{
-			APIVersion: "platformctl.io/v1alpha2",
+			APIVersion: "platformctl.io/v1beta1",
 			Name:       "bad",
 			Inputs: map[string]Input{
 				"project_name": {Type: "string", Required: true},
@@ -132,7 +142,7 @@ func TestValidateRejectsUnsupportedValuesAndUnsafeGeneratedPath(t *testing.T) {
 func TestBuildPlanDoesNotExecuteCommands(t *testing.T) {
 	resolved := &Resolved{
 		Manifest: Manifest{
-			APIVersion: "platformctl.io/v1alpha2",
+			APIVersion: "platformctl.io/v1beta1",
 			Name:       "plan-only",
 			Inputs:     map[string]Input{},
 			Files:      []GeneratedFile{{Path: "generated/out.txt", Content: "ok"}},
@@ -160,7 +170,7 @@ func TestBuildPlanDoesNotExecuteCommands(t *testing.T) {
 func TestValidateRequiresInputDescriptionAndSafeStepCommand(t *testing.T) {
 	resolved := &Resolved{
 		Manifest: Manifest{
-			APIVersion: "platformctl.io/v1alpha2",
+			APIVersion: "platformctl.io/v1beta1",
 			Metadata: Metadata{
 				Name:        "unsafe",
 				Description: "Unsafe command test.",
@@ -205,6 +215,73 @@ func TestPlanStepUsesExplicitStableID(t *testing.T) {
 	}
 	if planned.ID != "install-monitoring" {
 		t.Fatalf("planned ID = %q, want install-monitoring", planned.ID)
+	}
+}
+
+func TestValidateRejectsUnsafeCredentialCommand(t *testing.T) {
+	resolved := &Resolved{
+		Manifest: Manifest{
+			APIVersion: "platformctl.io/v1beta1",
+			Metadata: Metadata{
+				Name:        "credentials-unsafe",
+				Description: "Unsafe credential command test.",
+			},
+			Inputs: map[string]Input{
+				"project_name": {Description: "Project", Type: "string", Required: true},
+			},
+			Requirements: Requirements{
+				Credentials: []Credential{
+					{Name: "aws", Command: "aws sts get-caller-identity"},
+				},
+			},
+			Files: []GeneratedFile{{Path: "generated/out.txt", Content: "ok"}},
+			Steps: Steps{
+				Apply:   []Step{{Name: "apply", Command: "echo"}},
+				Destroy: []Step{{Name: "destroy", Command: "echo"}},
+			},
+		},
+		Platform: PlatformFile{Values: map[string]interface{}{"project_name": "demo"}},
+		Values:   map[string]interface{}{"project_name": "demo"},
+	}
+	err := resolved.Validate()
+	if err == nil {
+		t.Fatal("Validate succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "requirements.credentials[0].command must be a single executable name") {
+		t.Fatalf("validation error missing credential command safety: %s", err.Error())
+	}
+}
+
+func TestGenerateWithPreviousKeepsUnmanagedFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "generated", "managed-old.txt"), "old")
+	writeFile(t, filepath.Join(root, "generated", "manual.txt"), "manual")
+
+	resolved := &Resolved{
+		Manifest: Manifest{
+			APIVersion: "platformctl.io/v1beta1",
+			Files: []GeneratedFile{
+				{Path: "generated/managed-new.txt", Content: "new"},
+			},
+		},
+		Values: map[string]interface{}{},
+	}
+
+	_, err := resolved.GenerateWithPrevious([]string{"generated/managed-old.txt"})
+	if err != nil {
+		t.Fatalf("GenerateWithPrevious returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "generated", "manual.txt")); err != nil {
+		t.Fatalf("manual file should remain: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "generated", "managed-old.txt")); !os.IsNotExist(err) {
+		t.Fatalf("managed-old file should be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "generated", "managed-new.txt")); err != nil {
+		t.Fatalf("managed-new file missing: %v", err)
 	}
 }
 

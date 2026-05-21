@@ -88,9 +88,10 @@ type Tool struct {
 }
 
 type Credential struct {
-	Name        string `yaml:"name" json:"name"`
-	Description string `yaml:"description" json:"description,omitempty"`
-	Command     string `yaml:"command" json:"-"`
+	Name        string   `yaml:"name" json:"name"`
+	Description string   `yaml:"description" json:"description,omitempty"`
+	Command     string   `yaml:"command" json:"command,omitempty"`
+	Args        []string `yaml:"args" json:"args,omitempty"`
 }
 
 type GeneratedFile struct {
@@ -248,8 +249,11 @@ func ResolveTemplateSource(template TemplateSource) (SourceInfo, error) {
 		}
 	}
 
-	if strings.HasPrefix(source, "https://") || strings.HasPrefix(source, "http://") {
+	if strings.HasPrefix(source, "https://") {
 		return SourceInfo{Original: template.Source, Resolved: source, Version: version, Kind: "url"}, nil
+	}
+	if strings.HasPrefix(source, "http://") {
+		return SourceInfo{}, fmt.Errorf("template.source must use https when loading remote templates")
 	}
 
 	if isLocalSource(source) {
@@ -287,7 +291,7 @@ func ResolveTemplateSource(template TemplateSource) (SourceInfo, error) {
 
 	parts := strings.Split(source, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return SourceInfo{}, fmt.Errorf("template.source must be an http(s) URL, local path, or registry reference like platformctl/aws-eks-standard")
+		return SourceInfo{}, fmt.Errorf("template.source must be an https URL, local path, or registry reference like platformctl/aws-eks-standard")
 	}
 
 	switch parts[0] {
@@ -309,11 +313,11 @@ func ResolveTemplateSource(template TemplateSource) (SourceInfo, error) {
 
 func (r *Resolved) Validate() error {
 	var problems []string
-	if r.Manifest.APIVersion != "platformctl.io/v1alpha2" {
+	if r.Manifest.APIVersion != "platformctl.io/v1beta1" {
 		if r.Manifest.APIVersion == "" {
 			problems = append(problems, "template.apiVersion is required")
 		} else {
-			problems = append(problems, fmt.Sprintf("template.apiVersion %q is not supported; expected platformctl.io/v1alpha2", r.Manifest.APIVersion))
+			problems = append(problems, fmt.Sprintf("template.apiVersion %q is not supported; expected platformctl.io/v1beta1", r.Manifest.APIVersion))
 		}
 	}
 	if r.Manifest.Kind != "" && r.Manifest.Kind != "PlatformTemplate" {
@@ -358,6 +362,22 @@ func (r *Resolved) Validate() error {
 		}
 		if file.Content == "" && file.Source == "" {
 			problems = append(problems, fmt.Sprintf("template file %s must define content or source", file.Path))
+		}
+	}
+	for idx, credential := range r.Manifest.Requirements.Credentials {
+		if strings.TrimSpace(credential.Name) == "" {
+			problems = append(problems, fmt.Sprintf("requirements.credentials[%d].name is required", idx))
+		}
+		if strings.TrimSpace(credential.Command) == "" {
+			continue
+		}
+		if strings.ContainsAny(credential.Command, " \t\n\r;&|`$<>") {
+			problems = append(problems, fmt.Sprintf("requirements.credentials[%d].command must be a single executable name", idx))
+		}
+		for argIndex, arg := range credential.Args {
+			if strings.ContainsAny(arg, "\x00\n\r") {
+				problems = append(problems, fmt.Sprintf("requirements.credentials[%d].args[%d] contains an unsafe control character", idx, argIndex))
+			}
 		}
 	}
 	for _, phase := range []string{"plan", "apply", "destroy"} {
@@ -477,9 +497,21 @@ func (r *Resolved) RenderedFilePaths() ([]string, error) {
 }
 
 func (r *Resolved) Generate() ([]string, error) {
-	if err := os.RemoveAll(DefaultGeneratedDir); err != nil {
-		return nil, fmt.Errorf("remove %s: %w", DefaultGeneratedDir, err)
+	return r.GenerateWithPrevious(nil)
+}
+
+func (r *Resolved) GenerateWithPrevious(previousManaged []string) ([]string, error) {
+	desired := map[string]bool{}
+	for _, file := range r.Manifest.Files {
+		if err := validateGeneratedPath(file.Path); err != nil {
+			return nil, err
+		}
+		desired[filepath.Clean(file.Path)] = true
 	}
+	if err := reconcileManagedFiles(previousManaged, desired); err != nil {
+		return nil, err
+	}
+
 	written := make([]string, 0, len(r.Manifest.Files))
 	for _, file := range r.Manifest.Files {
 		if err := validateGeneratedPath(file.Path); err != nil {
@@ -499,6 +531,40 @@ func (r *Resolved) Generate() ([]string, error) {
 	}
 	sort.Strings(written)
 	return written, nil
+}
+
+func reconcileManagedFiles(previousManaged []string, desired map[string]bool) error {
+	for _, path := range previousManaged {
+		clean := filepath.Clean(path)
+		if !desired[clean] {
+			if err := validateGeneratedPath(clean); err != nil {
+				continue
+			}
+			if err := os.Remove(clean); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("remove previously managed file %s: %w", clean, err)
+			}
+			pruneGeneratedDir(filepath.Dir(clean))
+		}
+	}
+	return nil
+}
+
+func pruneGeneratedDir(dir string) {
+	stop := filepath.Clean(DefaultGeneratedDir)
+	clean := filepath.Clean(dir)
+	for clean != "." && clean != string(os.PathSeparator) {
+		if clean == stop {
+			return
+		}
+		entries, err := os.ReadDir(clean)
+		if err != nil || len(entries) != 0 {
+			return
+		}
+		if err := os.Remove(clean); err != nil {
+			return
+		}
+		clean = filepath.Dir(clean)
+	}
 }
 
 func (r *Resolved) StepsFor(phase string) []Step {
@@ -926,8 +992,8 @@ func fetchTemplate(source SourceInfo) ([]byte, error) {
 	if source.Kind == "local" {
 		return os.ReadFile(source.Resolved)
 	}
-	if !strings.HasPrefix(source.Resolved, "https://") && !strings.HasPrefix(source.Resolved, "http://") {
-		return nil, fmt.Errorf("template.source must resolve to an http(s) URL or local path")
+	if !strings.HasPrefix(source.Resolved, "https://") {
+		return nil, fmt.Errorf("template.source must resolve to an https URL or local path")
 	}
 
 	cachePath, err := templateCachePath(source.Resolved)

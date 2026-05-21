@@ -83,4 +83,4 @@ platformctl apply --resume
 platformctl destroy --resume
 ```
 
-`platformctl` warns when generated files or the template checksum differ from the last recorded plan. In that case, run `platformctl plan` again before applying.
+`platformctl` warns when generated files or the template checksum differ from the last recorded plan. Resume is rejected when the plan hash changed. In that case, run `platformctl plan` again, then run `apply` or `destroy` without `--resume`.

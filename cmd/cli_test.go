@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"platformctl/internal/apperror"
 )
 
 func TestPlanCommandRendersLocalTemplateAndState(t *testing.T) {
@@ -81,12 +84,72 @@ func TestPreflightCommandHasDoctorAlias(t *testing.T) {
 	}
 }
 
+func TestApplyResumeFailsWhenPlanChanges(t *testing.T) {
+	root := setupCLITemplate(t)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	planCmd := newPlanCmd()
+	var planOut bytes.Buffer
+	planCmd.SetOut(&planOut)
+	planCmd.SetErr(&planOut)
+	if err := planCmd.Execute(); err != nil {
+		t.Fatalf("plan command returned error: %v\n%s", err, planOut.String())
+	}
+
+	writeCLIFile(t, filepath.Join(root, "template", "platform.template.yaml"), `
+apiVersion: platformctl.io/v1beta1
+kind: PlatformTemplate
+metadata:
+  name: cli-test
+  description: CLI test template.
+inputs:
+  project_name:
+    description: Project name for CLI tests.
+    type: string
+    required: true
+requirements:
+  tools:
+    - name: echo
+files:
+  - path: generated/out.txt
+    content: "hello {{ .Values.project_name }}"
+steps:
+  apply:
+    - name: echo apply changed
+      command: echo
+      args: ["apply", "{{ .Values.project_name }}", "changed"]
+  destroy:
+    - name: echo destroy
+      command: echo
+      args: ["destroy", "{{ .Values.project_name }}"]
+`)
+
+	applyCmd := newApplyCmd()
+	var out bytes.Buffer
+	applyCmd.SetOut(&out)
+	applyCmd.SetErr(&out)
+	applyCmd.SetArgs([]string{"--yes", "--resume"})
+	err := applyCmd.Execute()
+	if err == nil {
+		t.Fatal("apply --resume succeeded, want error")
+	}
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) {
+		t.Fatalf("error = %T, want *apperror.Error", err)
+	}
+	if appErr.Code != "PLATFORMCTL_RESUME_INVALID" {
+		t.Fatalf("error code = %q, want PLATFORMCTL_RESUME_INVALID", appErr.Code)
+	}
+}
+
 func setupCLITemplate(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, "template"))
 	writeCLIFile(t, filepath.Join(root, "template", "platform.template.yaml"), `
-apiVersion: platformctl.io/v1alpha2
+apiVersion: platformctl.io/v1beta1
 kind: PlatformTemplate
 metadata:
   name: cli-test

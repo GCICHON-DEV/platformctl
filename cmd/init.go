@@ -24,14 +24,14 @@ func newInitCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Example: `  platformctl init --template platformctl/local-kind-standard --project demo
-  platformctl init --template platformctl/aws-eks-standard --version v1.0.0 --project demo
+  platformctl init --template platformctl/aws-eks-standard --version v1.1.0 --project demo
   platformctl init --template ./examples/local-templates/custom-minimal --force`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if templateSource == "" {
 				templateSource = "platformctl/local-kind-standard"
 			}
 			if version == "" && !strings.HasPrefix(templateSource, ".") && !strings.HasPrefix(templateSource, "/") && !strings.HasPrefix(templateSource, "http") && !strings.Contains(templateSource, "@") {
-				version = "v1.0.0"
+				version = "v1.1.0"
 			}
 			if projectName == "" {
 				projectName = "demo"
