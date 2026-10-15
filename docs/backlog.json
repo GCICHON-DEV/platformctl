@@ -1,0 +1,731 @@
+{
+  "schemaVersion": 1,
+  "auditDate": "2026-10-15",
+  "projectKey": "PLAT",
+  "repositories": {
+    "cli": {
+      "url": "https://github.com/GCICHON-DEV/platformctl",
+      "sha": "ec7320b7c6c503751aefa996c49e760473964412"
+    },
+    "templates": {
+      "url": "https://github.com/GCICHON-DEV/platformctl-templates",
+      "sha": "5da82328723c62e97efe4256f490a232b1dc1c08"
+    }
+  },
+  "epics": [
+    {
+      "id": "E1",
+      "title": "Proces realizacji, wymagania i bramki dostarczenia",
+      "goal": "Zadania mają mierzalne kryteria, zależności i flow od Jira do zweryfikowanego wyniku.",
+      "jiraKey": "PLAT-2"
+    },
+    {
+      "id": "E2",
+      "title": "Bezpieczny i przewidywalny silnik CLI",
+      "goal": "Plan, apply, resume, destroy i stan chronią workspace oraz wykonują zatwierdzony zakres.",
+      "jiraKey": "PLAT-3"
+    },
+    {
+      "id": "E3",
+      "title": "Powtarzalna platforma lokalna i demo GitOps",
+      "goal": "Kind uruchamia działającą aplikację, GitOps, ingress i monitoring; po demo usuwa własne zasoby.",
+      "jiraKey": "PLAT-4"
+    },
+    {
+      "id": "E4",
+      "title": "Weryfikowalna platforma AWS EKS",
+      "goal": "Izolowane EKS ma kontrolę stanu, dostępu, kosztów i dowód pełnego lifecycle.",
+      "jiraKey": "PLAT-5"
+    },
+    {
+      "id": "E5",
+      "title": "Testy integracyjne, wydania i zgodność rejestru",
+      "goal": "CI sprawdza CLI i rejestr, a użytkownik otrzymuje sprawdzoną parę wersji.",
+      "jiraKey": "PLAT-6"
+    },
+    {
+      "id": "E6",
+      "title": "Portfolio i dokumentacja produktu",
+      "goal": "Osoba z zewnątrz instaluje projekt, uruchamia demo i rozumie architekturę oraz ograniczenia.",
+      "jiraKey": "PLAT-7"
+    },
+    {
+      "id": "E7",
+      "title": "Projekt inżynierski i ewaluacja",
+      "goal": "Wymagania, decyzje, eksperymenty i wyniki dają odtwarzalny materiał do pracy i obrony.",
+      "jiraKey": "PLAT-8"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T01",
+      "epic": "E1",
+      "priority": "High",
+      "track": "both",
+      "title": "Ustalić wymagania, zakres v1 i macierz odbioru",
+      "depends": [],
+      "evidence": "README.md: lokalny Kind i AWS jako podstawowy target; brak formalnych wymagań i kryteriów wydania.",
+      "acceptance": [
+        "Wymagania funkcjonalne i jakościowe mają identyfikatory, testy i kryteria odbioru.",
+        "Portfolio = działające lokalne demo; projekt inżynierski dodaje EKS, eksperymenty i opracowanie.",
+        "Azure jawnie oznaczone jako reference/poza v1; wymagania uczelni/promotora zebrane bez zgadywania."
+      ],
+      "validation": "Przegląd macierzy wymaganie → test → dowód oraz listy elementów poza zakresem.",
+      "status": "planned",
+      "jiraKey": "PLAT-9"
+    },
+    {
+      "id": "T02",
+      "epic": "E1",
+      "priority": "High",
+      "track": "both",
+      "title": "Wdrożyć flow MathCore i bramki exact-SHA w obu repozytoriach",
+      "depends": [],
+      "evidence": "Oba main są niechronione; CLI ma tylko job test, rejestr nie ma CI. Dokumenty flow przygotowane lokalnie.",
+      "acceptance": [
+        "AGENTS, CONTRIBUTING i szablon PR są w main obu repozytoriów.",
+        "Kontrola PR sprawdza Jira/FLOW, Conventional Commits i kryteria; merge gate wymaga niezależnego review bieżącego SHA, świeżego main i SUCCESS checks.",
+        "Nowy SHA/zmiana main blokuje merge do ponownej walidacji; raport start/koniec i cleanup mają format.",
+        "Runner wybierany po rzeczywistym sprawdzeniu dostępności, bez uruchamiania forków na współdzielonym persistent runnerze."
+      ],
+      "validation": "Pozytywne i negatywne fixture bramki oraz rzeczywisty PR → CI → review → merge → main CI.",
+      "status": "planned",
+      "jiraKey": "PLAT-1"
+    },
+    {
+      "id": "T03",
+      "epic": "E5",
+      "priority": "High",
+      "track": "both",
+      "title": "Rozszerzyć CI CLI o build, format, regresje i artefakty",
+      "depends": [
+        "T02"
+      ],
+      "evidence": ".github/workflows/ci.yml: vet, unit, race; brak build, format i artefaktów.",
+      "acceptance": [
+        "CI wykonuje gofmt check, vet, unit, race i build.",
+        "Wspierane GOOS/GOARCH mają jawny zakres, build i smoke adekwatne do platformy.",
+        "Raporty bez sekretów, limit czasu, minimalne permissions i sprzątanie własnych fixture."
+      ],
+      "validation": "Udane CI PR i main; kontrolowana niezgodność formatowania/build rzeczywiście blokuje.",
+      "status": "planned",
+      "jiraKey": "PLAT-10"
+    },
+    {
+      "id": "T04",
+      "epic": "E5",
+      "priority": "High",
+      "track": "both",
+      "title": "Dodać CI rejestru i macierz zgodności CLI–template",
+      "depends": [
+        "T02"
+      ],
+      "evidence": "platformctl-templates nie ma workflow; trzy manifesty są identycznymi kopiami examples/template-registry.",
+      "acceptance": [
+        "Walidacja i renderowanie wszystkich manifestów przez przypięty CLI SHA.",
+        "Walidacja wygenerowanych YAML/HCL i wykrywanie rozjazdu kopii przykładów.",
+        "Macierz zgodności i kolejność wydawania kontraktu; Azure jest walidowany statycznie bez deklaracji E2E."
+      ],
+      "validation": "Zepsuty manifest i niezgodność CLI kończą CI błędem; poprawna para ma dowód sukcesu.",
+      "status": "planned",
+      "jiraKey": "PLAT-11"
+    },
+    {
+      "id": "T05",
+      "epic": "E2",
+      "priority": "High",
+      "track": "both",
+      "title": "Chronić cały cykl zmian plików i stanu jedną blokadą",
+      "depends": [],
+      "evidence": "cmd/plan.go zapisuje state i generated bez locka; cmd/apply.go i destroy.go używają locka; state.Save używa współdzielonego pliku tmp.",
+      "acceptance": [
+        "init/plan/apply/destroy koordynują mutacje workspace i state.",
+        "Dwa procesy nie nadpisują checkpointów; stale-lock i PID reuse mają określone zasady.",
+        "Zwolnienie blokady nie usuwa blokady innego procesu."
+      ],
+      "validation": "Testy wieloprocesowe plan vs apply/destroy, stale-lock, crash i kontrola spójności stanu.",
+      "status": "planned",
+      "jiraKey": "PLAT-12"
+    },
+    {
+      "id": "T06",
+      "epic": "E2",
+      "priority": "Highest",
+      "track": "both",
+      "title": "Wiązać apply i resume z niezmiennym zatwierdzonym planem",
+      "depends": [
+        "T05"
+      ],
+      "evidence": "apply/destroy wywołują GenerateWithPrevious przed confirm; executionPlanHash obejmuje ścieżki plików, ale nie ich treść; warning nie blokuje zwykłego apply.",
+      "acceptance": [
+        "Plan zawiera digest renderowanych treści, wejść, źródeł, kroków i docelowego środowiska.",
+        "Anulowanie lub odrzucenie --json bez --yes nie zmienia generated/stanu ani nie instaluje narzędzi.",
+        "Zmiana planu/treści/template/target blokuje resume i wykonanie uprzednio zatwierdzonego planu.",
+        "Oddzielony kontrakt preview i realnego terraform plan; brak mylącego 'approved plan' bez dowodu."
+      ],
+      "validation": "Regresje zmiany inline content i source-file, wartości, args, targetu; anulowanie porównuje pliki przed/po.",
+      "status": "planned",
+      "jiraKey": "PLAT-13"
+    },
+    {
+      "id": "T07",
+      "epic": "E2",
+      "priority": "High",
+      "track": "both",
+      "title": "Renderować i uzgadniać pliki transakcyjnie",
+      "depends": [
+        "T05",
+        "T06"
+      ],
+      "evidence": "GenerateWithPrevious usuwa stare pliki przed wyrenderowaniem wszystkich nowych i zapisuje je kolejno.",
+      "acceptance": [
+        "Pełna walidacja/render do staging przed zastąpieniem zarządzanych plików.",
+        "Błąd w połowie nie usuwa poprzedniego działającego zestawu; rollback plików jest określony.",
+        "Kolizja z niezarządzanym plikiem wymaga jawnej decyzji; brak cichego nadpisania."
+      ],
+      "validation": "Wstrzyknięte błędy renderowania, uprawnień i zapisu; porównanie managed/unmanaged przed/po.",
+      "status": "planned",
+      "jiraKey": "PLAT-14"
+    },
+    {
+      "id": "T08",
+      "epic": "E2",
+      "priority": "High",
+      "track": "both",
+      "title": "Zabezpieczyć granice workspace przed symlinkami",
+      "depends": [
+        "T07"
+      ],
+      "evidence": "validateGeneratedPath i validateStepDir sprawdzają ścieżki leksykalnie; renderGeneratedFile czyta lokalne source bez sprawdzenia symlinków.",
+      "acceptance": [
+        "Zapis, usuwanie, source i cwd nie wychodzą z dozwolonych katalogów przez symlink.",
+        "Polityka zaufania szablonowi jest jawna: dowolna komenda nie jest sandboxem.",
+        "Testy obejmują ścieżkę pośrednią, końcowy symlink i zmianę podczas operacji w zakresie obsługiwanym przez system."
+      ],
+      "validation": "Fixture symlink do katalogu zewnętrznego pozostaje nietknięte po render/reconcile/run.",
+      "status": "planned",
+      "jiraKey": "PLAT-15"
+    },
+    {
+      "id": "T09",
+      "epic": "E2",
+      "priority": "Medium",
+      "track": "both",
+      "title": "Domknąć walidację kontraktu manifestu i wartości",
+      "depends": [],
+      "evidence": "validateType akceptuje float dla integer; nazwy plików i wymagania nie mają kompletnego schema/limitów.",
+      "acceptance": [
+        "Integer odrzuca ułamki; number zachowuje liczby zgodnie z kontraktem.",
+        "Duplikaty plików/ID, zakresy capacity/CIDR i błędne kombinacje są odrzucane przed mutacją.",
+        "Schema i testy zgodności v1beta1; limity rozmiaru/zagnieżdżenia i fuzz parsera/renderera."
+      ],
+      "validation": "Tablicowe i fuzz testy wartości brzegowych oraz wszystkich opublikowanych manifestów.",
+      "status": "planned",
+      "jiraKey": "PLAT-16"
+    },
+    {
+      "id": "T10",
+      "epic": "E2",
+      "priority": "High",
+      "track": "both",
+      "title": "Wprowadzić jawne zaufanie i blokadę wersji szablonów",
+      "depends": [
+        "T06"
+      ],
+      "evidence": "fetchTemplate: digest obliczany po pobraniu, fallback cache bez sygnału i io.ReadAll bez limitu.",
+      "acceptance": [
+        "Lock źródła do niezmiennego ref/digest oraz weryfikacja przed wykonaniem.",
+        "Cache/offline jest jawny, odporny na uszkodzenia i atomowy; update ma osobną operację.",
+        "Limit odpowiedzi i redirectów; błędy nie uruchamiają niespodziewanej starej treści."
+      ],
+      "validation": "Testy zmienionego tagu/digestu, corrupt cache, 404/offline i nadmiernej odpowiedzi.",
+      "status": "planned",
+      "jiraKey": "PLAT-17"
+    },
+    {
+      "id": "T11",
+      "epic": "E2",
+      "priority": "High",
+      "track": "both",
+      "title": "Zapewnić wersjonowany toolchain bez kolizji instalacji",
+      "depends": [],
+      "evidence": "toolchain używa ~/.platformctl/bin/<name> i stałego target.tmp; różne wersje współdzielą plik.",
+      "acceptance": [
+        "Cache narzędzi rozdzielony per wersja/OS/arch z lockiem i atomową instalacją.",
+        "Niespójny checksum blokuje wykonanie; brak niejawnego fallbacku na niezgodny PATH.",
+        "Równoległe projekty z różnymi wersjami nie zastępują sobie binarek."
+      ],
+      "validation": "Testy dwóch instalatorów, przerwanego pobrania i pary projektów z różnymi pinami.",
+      "status": "planned",
+      "jiraKey": "PLAT-18"
+    },
+    {
+      "id": "T12",
+      "epic": "E2",
+      "priority": "High",
+      "track": "both",
+      "title": "Ujednolicić redakcję sekretów w logach i planach",
+      "depends": [],
+      "evidence": "executor podpina stdout/stderr procesu bez redakcji; printSteps drukuje args; MaskCommand maskuje tylko część przypisań.",
+      "acceptance": [
+        "Polityka sekretów wyklucza hasła z manifestu/stanu/planu; logi nie drukują jawnych wartości.",
+        "Redakcja obejmuje flagi, URL, JSON i output procesów w udokumentowanym zakresie; nie obiecuje pełnej ochrony arbitralnego outputu.",
+        "Raporty i błędy zachowują diagnostykę bez ujawnienia fixture sekretów."
+      ],
+      "validation": "Canary sekrety w argumentach, stdout/stderr, błędach i JSON nie trafiają do raportu.",
+      "status": "planned",
+      "jiraKey": "PLAT-19"
+    },
+    {
+      "id": "T13",
+      "epic": "E2",
+      "priority": "High",
+      "track": "both",
+      "title": "Naprawić preflight, timeouty i kontrolę tożsamości celu",
+      "depends": [],
+      "evidence": "runPreflight/commandCheck używają exec.Command bez timeoutu; --strict nie zwraca błędu po nieudanych localReadinessChecks; apply nie wywołuje pełnego preflight.",
+      "acceptance": [
+        "Strict zwraca nonzero przy każdej wymaganej kontroli, z ograniczonym czasem.",
+        "Kontrole zależą od fazy; świeży bootstrap nie wymaga już istniejącego klastra.",
+        "Przed mutacją potwierdzany account/region/cluster/context; workspace i state są sprawdzane.",
+        "Brak cloud mutacji w samym preflight."
+      ],
+      "validation": "Stub hanging Docker/credential check, błędny context/account, brak workspace write; zero wykonanych mutacji.",
+      "status": "planned",
+      "jiraKey": "PLAT-20"
+    },
+    {
+      "id": "T14",
+      "epic": "E2",
+      "priority": "High",
+      "track": "both",
+      "title": "Domknąć cancel, timeout i resume po niepewnym wyniku",
+      "depends": [
+        "T05",
+        "T06"
+      ],
+      "evidence": "setupLockSignalRelease usuwa lock i wywołuje os.Exit; executor CommandContext nie ma jawnego lifecycle grupy potomków; checkpoint dopiero po sukcesie.",
+      "acceptance": [
+        "SIGINT/SIGTERM kończy kontrolowane procesy potomne przed zwolnieniem blokady.",
+        "Retry dotyczy tylko bezpiecznych kroków; niepewny wynik mutacji wymaga rekonsyliacji.",
+        "Dziennik faz ma start/success/failure/interrupted i migrację wersji stanu."
+      ],
+      "validation": "Test procesu potomnego, timeoutu po częściowym sukcesie, crash między sukcesem a zapisem checkpointu i wznowienia.",
+      "status": "planned",
+      "jiraKey": "PLAT-21"
+    },
+    {
+      "id": "T15",
+      "epic": "E2",
+      "priority": "Medium",
+      "track": "both",
+      "title": "Dodać rzeczywiste health/status z odróżnieniem checkpointów",
+      "depends": [
+        "T13"
+      ],
+      "evidence": "cmd/status.go wyłącznie odczytuje state.Load; nie odpytuje klastra ani aplikacji.",
+      "acceptance": [
+        "Status pokazuje osobno lokalny stan i sprawdzone zdrowie platformy.",
+        "Kontrole nodes, deploymentów i aplikacji mają timeouty oraz expected target.",
+        "JSON ma unknown/degraded/healthy i czas pomiaru; brak stanu nie oznacza zdrowia."
+      ],
+      "validation": "Symulacja zdrowej, niedostępnej i częściowo uszkodzonej platformy.",
+      "status": "planned",
+      "jiraKey": "PLAT-22"
+    },
+    {
+      "id": "T16",
+      "epic": "E2",
+      "priority": "Medium",
+      "track": "both",
+      "title": "Ustabilizować kontrakt JSON, błędów i kodów wyjścia",
+      "depends": [],
+      "evidence": "TestStatusCommandSupportsJSON sprawdza fragment stringa; writeJSON ignoruje błąd encodera; exit zawsze 1 przy błędzie.",
+      "acceptance": [
+        "Każda komenda ma opisany schemat stdout/stderr i kody wyjścia.",
+        "stdout --json zawiera jeden poprawny dokument także przy błędzie i warningach.",
+        "Testowane całe komendy, błędy serializacji i zgodność wsteczna kontraktu."
+      ],
+      "validation": "Parsowanie JSON z uruchomionej binarki dla success, warning, failure i cancel.",
+      "status": "planned",
+      "jiraKey": "PLAT-23"
+    },
+    {
+      "id": "T17",
+      "epic": "E2",
+      "priority": "Medium",
+      "track": "both",
+      "title": "Uczynić init atomowym i niezależnym od nazwy szablonu",
+      "depends": [
+        "T09"
+      ],
+      "evidence": "init zapisuje platform.yaml przed walidacją i ustawia inputy przez strings.Contains(aws-eks/local-kind).",
+      "acceptance": [
+        "Init odczytuje inputy/defaults z manifestu; custom templates działają bez hardcode nazw.",
+        "Niepoprawny template i nieudany init nie niszczy istniejącego configu.",
+        "--force ma jednoznaczne zachowanie, testowane katalogi local/URL/registry."
+      ],
+      "validation": "Test błędnego manifestu oraz init wszystkich wspieranych szablonów i custom inputów.",
+      "status": "planned",
+      "jiraKey": "PLAT-24"
+    },
+    {
+      "id": "T18",
+      "epic": "E3",
+      "priority": "High",
+      "track": "portfolio",
+      "title": "Doprowadzić lokalny stack do powtarzalnego ingress i pinów",
+      "depends": [
+        "T04",
+        "T09"
+      ],
+      "evidence": "local-kind: Kind v0.24.0, kubectl v1.34.0; charty bez --version; mapowania 80/443 przy NodePort bez jawnego spięcia portów.",
+      "acceptance": [
+        "Sprawdzona macierz Kind/node image/kubectl/chartów z pinami wersji.",
+        "Ruch host → ingress → demo rzeczywiście działa na udokumentowanym porcie.",
+        "Wymagania CPU/RAM/porty i readiness są mierzone; wybór wspieranego ingress potwierdzony aktualną dokumentacją."
+      ],
+      "validation": "Czysta maszyna/workspace: instalacja stacku, HTTP health z hosta i dowód wersji.",
+      "status": "planned",
+      "jiraKey": "PLAT-25"
+    },
+    {
+      "id": "T19",
+      "epic": "E3",
+      "priority": "High",
+      "track": "both",
+      "title": "Zapewnić idempotencję i własność zasobów lokalnego lifecycle",
+      "depends": [
+        "T13",
+        "T14",
+        "T18"
+      ],
+      "evidence": "kind create cluster kończy się błędem dla istniejącej nazwy; kubectl/helm nie mają jawnego context; destroy wybiera klaster nazwą.",
+      "acceptance": [
+        "Drugie apply bez zmian ma bezpieczny wynik; istniejący obcy klaster nie jest adoptowany/usuwany.",
+        "Wszystkie kroki używają dedykowanego kubeconfig i jawnego context.",
+        "Własność, UID/identity i ślad utworzenia są zapisane; destroy czyści wyłącznie zasoby projektu."
+      ],
+      "validation": "Dwa projekty równolegle, obcy context, kolizja nazwy i powtórny apply/destroy.",
+      "status": "planned",
+      "jiraKey": "PLAT-26"
+    },
+    {
+      "id": "T20",
+      "epic": "E3",
+      "priority": "High",
+      "track": "portfolio",
+      "title": "Dostarczyć aplikację demo i pełną ścieżkę GitOps",
+      "depends": [
+        "T18",
+        "T19"
+      ],
+      "evidence": "Szablony instalują ArgoCD, ale nie tworzą Application/AppProject ani demonstracyjnej aplikacji.",
+      "acceptance": [
+        "Przypięta aplikacja demo ma AppProject, Application, ograniczenia repo/namespace i health.",
+        "Zmiana w repo powoduje sync i zmianę wersji dostępnej przez ingress.",
+        "Udokumentowany rollback GitOps; demo nie wymaga prywatnych danych."
+      ],
+      "validation": "Pokaz commit → sync → HTTP wersja → rollback → HTTP poprzednia wersja.",
+      "status": "planned",
+      "jiraKey": "PLAT-27"
+    },
+    {
+      "id": "T21",
+      "epic": "E3",
+      "priority": "Medium",
+      "track": "portfolio",
+      "title": "Dostarczyć dashboardy i testowalny alert dla demo",
+      "depends": [
+        "T20"
+      ],
+      "evidence": "Monitoring to instalacja kube-prometheus-stack; brak własnych dashboardów, ServiceMonitor i reguł demo.",
+      "acceptance": [
+        "Metryki aplikacji widoczne w Prometheus i dashboardzie Grafana.",
+        "Syntetyczna awaria uruchamia i wygasza alert lokalnie bez realnej wysyłki.",
+        "Retencja i zużycie zasobów dostosowane do laptopa; dowody są eksportowalne."
+      ],
+      "validation": "Scenariusz load/error → wykres/alert → recovery; screenshot i eksport dashboardu.",
+      "status": "planned",
+      "jiraKey": "PLAT-28"
+    },
+    {
+      "id": "T22",
+      "epic": "E3",
+      "priority": "High",
+      "track": "both",
+      "title": "Zweryfikować izolację namespace, RBAC i obsługę sekretów",
+      "depends": [
+        "T18"
+      ],
+      "evidence": "Manifesty tworzą namespace/quoty; lokalny brak LimitRange i brak polityk izolacji workloadów.",
+      "acceptance": [
+        "Udokumentowane granice dev/staging; RBAC i NetworkPolicy z dobranym CNI/potwierdzonym egzekwowaniem.",
+        "Quoty/LimitRange mają pozytywne i negatywne testy.",
+        "Sekrety/demo access przekazywane bez jawnych wartości w repo, configu i raportach."
+      ],
+      "validation": "Próba cross-namespace i przekroczenia quota kończy się oczekiwanym deny; normalna aplikacja działa.",
+      "status": "planned",
+      "jiraKey": "PLAT-29"
+    },
+    {
+      "id": "T23",
+      "epic": "E5",
+      "priority": "High",
+      "track": "portfolio",
+      "title": "Uruchamiać Kind E2E z awarią, resume i cleanup w CI",
+      "depends": [
+        "T03",
+        "T04",
+        "T06",
+        "T08",
+        "T10",
+        "T11",
+        "T12",
+        "T13",
+        "T14",
+        "T16",
+        "T17",
+        "T19",
+        "T20",
+        "T21",
+        "T22"
+      ],
+      "evidence": "cmd/cli_test.go używa echo; brak prawdziwego klastra w CI.",
+      "acceptance": [
+        "Pipeline init → preflight → plan → apply → health → GitOps → destroy działa na izolowanym klastrze.",
+        "Test celowej awarii i resume; drugie apply; błędny context; cleanup także po failure/cancel.",
+        "Artefakty zawierają SHA/parę wersji, czasy i zredagowane dowody; brak cloud credentials."
+      ],
+      "validation": "Udane E2E oraz celowo nieudany run z potwierdzonym cleanup; zasoby innych projektów nietknięte.",
+      "status": "planned",
+      "jiraKey": "PLAT-30"
+    },
+    {
+      "id": "T24",
+      "epic": "E4",
+      "priority": "High",
+      "track": "engineering",
+      "title": "Zweryfikować Terraform EKS i wykonywanie zapisanego planu",
+      "depends": [
+        "T04",
+        "T06",
+        "T09"
+      ],
+      "evidence": "EKS: Terraform 1.5.7, provider >=6.28, module ~>21.0; plan tylko wypisany, apply -auto-approve bez planfile.",
+      "acceptance": [
+        "Aktualna zgodność wersji potwierdzona, provider/module/charty mają ograniczone piny i lock.",
+        "Render → fmt → init backend=false → validate bez cloud mutacji w CI.",
+        "W izolowanym AWS prawdziwy zapisany plan jest oceniany i dokładnie ten plik wykonany; drift blokuje."
+      ],
+      "validation": "Walidacja offline i kontrolowany plan/apply w jawnie wskazanym koncie/regionie.",
+      "status": "planned",
+      "jiraKey": "PLAT-31"
+    },
+    {
+      "id": "T25",
+      "epic": "E4",
+      "priority": "High",
+      "track": "engineering",
+      "title": "Zabezpieczyć Terraform state i odtwarzanie workspace",
+      "depends": [
+        "T24"
+      ],
+      "evidence": "Stan Terraform pozostaje pod generated/terraform; brak backendu, backupu i runbooka utraty workspace.",
+      "acceptance": [
+        "Wybrany backend, szyfrowanie, locking, minimalny dostęp i migracja lokalnego state.",
+        "Backup/odzyskanie sprawdzone na kopii z ochroną sekretów.",
+        "Utrata lokalnego workspace nie prowadzi do duplikacji zasobów ani braku możliwości destroy."
+      ],
+      "validation": "Odtworzenie izolowanego workspace i no-change plan z zachowanego state; brak automatycznego restore produkcji.",
+      "status": "planned",
+      "jiraKey": "PLAT-32"
+    },
+    {
+      "id": "T26",
+      "epic": "E4",
+      "priority": "High",
+      "track": "engineering",
+      "title": "Domknąć AWS IAM, storage, ingress i dostęp operatora",
+      "depends": [
+        "T24",
+        "T25"
+      ],
+      "evidence": "EKS endpoint publiczny i creator admin; brak jawnego EBS CSI/LB controller/StorageClass w szablonie.",
+      "acceptance": [
+        "Uprawnienia operatora/workloadów, endpoint CIDR i admin access mają określone minimum.",
+        "PVC i LoadBalancer/ingress przechodzą test z rzeczywistym ruchem; potrzebne kontrolery mają IAM.",
+        "Dashboardy nie są publiczne bez uwierzytelnienia/TLS; profile/region/target nie mieszają się."
+      ],
+      "validation": "Test PVC write/read, HTTP/TLS, denied IAM/RBAC oraz degradacji kontrolera.",
+      "status": "planned",
+      "jiraKey": "PLAT-33"
+    },
+    {
+      "id": "T27",
+      "epic": "E4",
+      "priority": "High",
+      "track": "engineering",
+      "title": "Zapewnić kompletne i wznawialne sprzątanie AWS",
+      "depends": [
+        "T26",
+        "T14"
+      ],
+      "evidence": "destroy EKS uruchamia tylko terraform init/destroy; brak uporządkowanego cleanup LB/PVC/Helm.",
+      "acceptance": [
+        "Kolejność usuwa własne LB/PVC/Helm przed klastrem/VPC, z ochroną danych i zasobów obcych.",
+        "Destroy/resume ma kontrolę ownership oraz post-check AWS zasobów i kosztów.",
+        "Runbook częściowego błędu i ocalałego state; brak cichego orphan cleanup poza projektem."
+      ],
+      "validation": "Cykl z LB/PVC i awarią destroy; inventory po zakończeniu potwierdza brak własnych naliczających zasobów.",
+      "status": "planned",
+      "jiraKey": "PLAT-34"
+    },
+    {
+      "id": "T28",
+      "epic": "E4",
+      "priority": "High",
+      "track": "engineering",
+      "title": "Przeprowadzić odbiór EKS z budżetem i dowodami kosztów",
+      "depends": [
+        "T23",
+        "T25",
+        "T26",
+        "T27"
+      ],
+      "evidence": "Brak dowodów wykonania AWS E2E w audytowanych repozytoriach; są tylko ostrzeżenia o kosztach.",
+      "acceptance": [
+        "Przed startem wskazane konto/region/budżet/TTL i zgoda na kosztowny zakres.",
+        "Pełny lifecycle, app/GitOps/metryki, awaria i resume z konkretną parą CLI–template.",
+        "Zmierzone koszty i czas; destroy/inventory oraz opóźnienie danych billing jawnie opisane."
+      ],
+      "validation": "Raport akceptacji z runami, inventory i pomiarem billing; brak uznania estymacji za faktyczny koszt.",
+      "status": "planned",
+      "jiraKey": "PLAT-35"
+    },
+    {
+      "id": "T29",
+      "epic": "E5",
+      "priority": "High",
+      "track": "portfolio",
+      "title": "Wydać instalowalne CLI z checksumami i pinem rejestru",
+      "depends": [
+        "T03",
+        "T04",
+        "T23",
+        "T34"
+      ],
+      "evidence": "Repo CLI nie ma GitHub Releases ani komendy version; rejestr ma tagi v1.0.0 i v1.1.0.",
+      "acceptance": [
+        "SemVer, version/build SHA, binarki wspieranych OS/arch i SHA256SUMS.",
+        "Artefakt powstaje z zielonego main SHA; opublikowany release wskazuje zgodny immutable template ref.",
+        "Instalacja i rollback z release sprawdzone poza checkoutem; release notes podają ograniczenia."
+      ],
+      "validation": "Pobierz właściwą binarkę, sprawdź checksum/version i wykonaj lokalny smoke z udokumentowanego quickstart.",
+      "status": "planned",
+      "jiraKey": "PLAT-36"
+    },
+    {
+      "id": "T30",
+      "epic": "E6",
+      "priority": "High",
+      "track": "portfolio",
+      "title": "Przygotować pakiet portfolio i demo od czystej instalacji",
+      "depends": [
+        "T15",
+        "T20",
+        "T21",
+        "T23",
+        "T29"
+      ],
+      "evidence": "README opisuje workflow i safety, ale brak C4/ADR, galerii, filmu i rzeczywistego scenariusza aplikacji.",
+      "acceptance": [
+        "README zawiera problem, zakres, instalację i sprawdzony quickstart; C4, lifecycle/stan i ADR.",
+        "Krótki scenariusz demo z GitOps, ingress, monitoringiem, błędem/resume i cleanup.",
+        "Zrzuty/film i raport testów pochodzą z konkretnego wydania, bez sekretów; ograniczenia jawne."
+      ],
+      "validation": "Osoba odtwarza demo bez zgadywania; linki i artefakty zweryfikowane.",
+      "status": "planned",
+      "jiraKey": "PLAT-37"
+    },
+    {
+      "id": "T31",
+      "epic": "E7",
+      "priority": "High",
+      "track": "engineering",
+      "title": "Przeprowadzić porównawcze eksperymenty i pomiary",
+      "depends": [
+        "T01",
+        "T23",
+        "T28"
+      ],
+      "evidence": "Brak benchmarków/metryk jakości oraz baseline manualnego bootstrapu.",
+      "acceptance": [
+        "Hipotezy i protokół określone przed pomiarem: ręczny bootstrap vs CLI, cold/warm start, retry/resume, zużycie zasobów/koszt.",
+        "Powtarzane próby z wersjami środowiska, surowymi danymi, błędami i statystykami.",
+        "Wnioski odróżniają wynik od estymacji; ograniczenia i zagrożenia trafności opisane."
+      ],
+      "validation": "Odtworzenie tabel/wykresów z zachowanego datasetu i skryptów; jawna liczba prób.",
+      "status": "planned",
+      "jiraKey": "PLAT-38"
+    },
+    {
+      "id": "T32",
+      "epic": "E7",
+      "priority": "High",
+      "track": "engineering",
+      "title": "Opracować dokumentację pracy inżynierskiej z traceability",
+      "depends": [
+        "T01",
+        "T31"
+      ],
+      "evidence": "Brak opracowania akademickiego i potwierdzonych wymagań promotora/uczelni.",
+      "acceptance": [
+        "Problem/cel, analiza rozwiązań, wymagania, architektura, implementacja, testy, wyniki, dyskusja i wnioski.",
+        "Wymaganie → implementacja → test → pomiar; ADR uzasadniają Go, kontrakt i rozdzielenie CLI/rejestru.",
+        "Bibliografia i format zgodne z dostarczonymi wytycznymi; żadnych fikcyjnych pomiarów ani źródeł."
+      ],
+      "validation": "Spójność numerów wymagań i wyników; akceptacja zakresu akademickiego według rzeczywistych wytycznych.",
+      "status": "planned",
+      "jiraKey": "PLAT-39"
+    },
+    {
+      "id": "T33",
+      "epic": "E7",
+      "priority": "Medium",
+      "track": "engineering",
+      "title": "Zamknąć projekt wydaniem odtwarzalnym i pakietem obrony",
+      "depends": [
+        "T28",
+        "T30",
+        "T32"
+      ],
+      "evidence": "Brak release acceptance i materiałów obrony obejmujących oba repozytoria.",
+      "acceptance": [
+        "Zamrożone wersje kodu, manifestów, dokumentacji i datasetów z checklistą odbioru.",
+        "Scenariusz prezentacji i wariant awaryjny offline; pytania architektoniczne i ograniczenia.",
+        "Odtworzenie na czystym środowisku, brak otwartych blockerów lub jawnie przyjęte odstępstwa."
+      ],
+      "validation": "Pełna próba demo/obrony na release bez zależności od niezatwierdzonych lokalnych plików.",
+      "status": "planned",
+      "jiraKey": "PLAT-40"
+    },
+    {
+      "id": "T34",
+      "epic": "E6",
+      "priority": "Medium",
+      "track": "both",
+      "title": "Ustalić licencję, politykę zależności i utrzymania",
+      "depends": [],
+      "evidence": "Publiczny CLI nie ma LICENSE; brak zasad wsparcia wersji i zgłaszania problemów.",
+      "acceptance": [
+        "Wybór licencji przez właściciela, LICENSE w obu repo i zgodne atrybucje.",
+        "Polityka aktualizacji Go/narzędzi/chartów i kompatybilności kontraktu.",
+        "Minimalne SECURITY/contribution guidance, dependency inventory i sposób zgłaszania błędów."
+      ],
+      "validation": "Przegląd zależności/licencji i metadanych release; licencja nie jest wybierana arbitralnie przez agenta.",
+      "status": "planned",
+      "jiraKey": "PLAT-41"
+    }
+  ]
+}

@@ -211,3 +211,11 @@ go build -o platformctl .
 
 - Template authoring guide: [docs/template-authoring.md](docs/template-authoring.md)
 - Troubleshooting guide: [docs/troubleshooting.md](docs/troubleshooting.md)
+
+## Development and completion plan
+
+- [Contribution and delivery flow](CONTRIBUTING.md)
+- [Project audit and portfolio/engineering backlog](docs/project-audit.md)
+- [Machine-readable planning backlog](docs/backlog.json)
+
+The audit distinguishes static validation from real Kind/AWS acceptance. Cloud provisioning is not part of the planning/setup change.
