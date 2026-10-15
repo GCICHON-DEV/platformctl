@@ -10,9 +10,10 @@ import (
 )
 
 type Runner struct {
-	Stdout  io.Writer
-	Stderr  io.Writer
-	PathEnv string
+	Stdout       io.Writer
+	Stderr       io.Writer
+	PathEnv      string
+	WorkflowLock *os.File
 }
 
 func NewRunner(stdout, stderr io.Writer) *Runner {
@@ -21,6 +22,12 @@ func NewRunner(stdout, stderr io.Writer) *Runner {
 
 func (r *Runner) WithPathEnv(pathEnv string) *Runner {
 	r.PathEnv = pathEnv
+	return r
+}
+
+// WithWorkflowLock keeps surviving workflow steps exclusive after a CLI crash.
+func (r *Runner) WithWorkflowLock(file *os.File) *Runner {
+	r.WorkflowLock = file
 	return r
 }
 

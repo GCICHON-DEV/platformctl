@@ -69,6 +69,9 @@ func (r *Runner) RunStepWithOptions(options StepOptions) error {
 		return stepError(options, started, fmt.Errorf("command %s not found", options.Command))
 	}
 	cmd := exec.CommandContext(ctx, commandPath, options.Args...)
+	if r.WorkflowLock != nil {
+		cmd.ExtraFiles = []*os.File{r.WorkflowLock}
+	}
 	if r.PathEnv != "" {
 		cmd.Env = appendPathEnv(r.PathEnv)
 	}

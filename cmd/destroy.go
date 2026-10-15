@@ -23,6 +23,11 @@ func newDestroyCmd() *cobra.Command {
   platformctl destroy --yes
   platformctl destroy --resume`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			lock, err := acquireWorkflowLock("destroy")
+			if err != nil {
+				return err
+			}
+			defer lock.Release()
 			resolved, err := templateengine.Load(defaultConfigFile)
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryConfig, "PLATFORMCTL_CONFIG_LOAD", "could not load platform.yaml")
@@ -30,16 +35,11 @@ func newDestroyCmd() *cobra.Command {
 			if err := resolved.Validate(); err != nil {
 				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_TEMPLATE_INVALID", "template validation failed")
 			}
-			lock, err := acquireWorkflowLock("destroy")
-			if err != nil {
-				return err
-			}
-			defer lock.Release()
 			manager, _, err := ensureToolchain(cmd, resolved, true)
 			if err != nil {
 				return err
 			}
-			runner := executor.NewRunner(workflowStdout(cmd.OutOrStdout(), cmd.ErrOrStderr()), cmd.ErrOrStderr()).WithPathEnv(manager.PathEnv())
+			runner := executor.NewRunner(workflowStdout(cmd.OutOrStdout(), cmd.ErrOrStderr()), cmd.ErrOrStderr()).WithPathEnv(manager.PathEnv()).WithWorkflowLock(lock.File())
 			if err := runner.RequireTools(resolved.RequiredTools()...); err != nil {
 				return apperror.Wrap(err, apperror.CategoryDependency, "PLATFORMCTL_MISSING_TOOLS", "required tools are missing")
 			}

@@ -17,6 +17,11 @@ func newPlanCmd() *cobra.Command {
 		Example: `  platformctl plan
   platformctl plan --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			lock, err := acquireWorkflowLock("plan")
+			if err != nil {
+				return err
+			}
+			defer lock.Release()
 			resolved, err := templateengine.Load(defaultConfigFile)
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryConfig, "PLATFORMCTL_CONFIG_LOAD", "could not load platform.yaml")

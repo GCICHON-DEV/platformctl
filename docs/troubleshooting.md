@@ -74,7 +74,7 @@ Check provider downloads, state locks, account quota, and cloud permissions.
 
 ## State And Resume
 
-Local state is stored in `.platformctl/state.json`. `apply` and `destroy` create `.platformctl/lock` while running to prevent concurrent workflows. If a process is interrupted, the lock is removed on normal interrupt handling; if the process is force-killed, remove a stale lock only after confirming no `platformctl` process is running.
+Local state is stored in `.platformctl/state.json`. All mutating commands (`init`, `plan`, `apply`/`up`, `destroy`/`down`) hold the same lock throughout configuration loading, rendering, confirmation, execution, and checkpoint writes. A rejected command leaves these files and checkpoints untouched. `status` reads the last complete checkpoint and does not acquire the workflow lock.
 
 If a workflow fails after some steps complete:
 
@@ -84,3 +84,14 @@ platformctl destroy --resume
 ```
 
 `platformctl` warns when generated files or the template checksum differ from the last recorded plan. Resume is rejected when the plan hash changed. In that case, run `platformctl plan` again, then run `apply` or `destroy` without `--resume`.
+
+
+## Workspace Lock Recovery And Rollback
+
+Linux and macOS use a nonblocking kernel `flock` on the persistent `.platformctl/lock` file. Its `platformctl-lock-v2` metadata records the last owner for diagnosis; the kernel lock decides whether the workspace is busy, regardless of PID reuse. The CLI never deletes this file, including during release or signal handling. Do not remove/replace the file or its parent directory while any CLI or workflow step may be active, and use a local filesystem supporting `flock` (no cross-machine coordination guarantee).
+
+Steps inherit the lock as descriptor 3. After SIGINT/SIGTERM/SIGKILL of only the CLI, a surviving synchronous step retains ownership until it exits and closes its inherited copies. Wait for that step, or inspect and stop it deliberately before retrying. Templates must preserve descriptor 3 and must not unlock it or daemonize; tools that close inherited descriptors are outside this guarantee. Full cancellation/process-group handling and reconciliation of an uncertain external result belong to PLAT-21. A completed external action without a saved checkpoint may run again on resume; inspect its result before resuming.
+
+For an older PID-only lock, an absent PID allows automatic in-place conversion. A live PID (including reuse by another process), malformed legacy contents, or an unsupported filesystem causes a safe refusal. There is no age-based expiry. First confirm the workspace has no CLI or descendant step running; only then preserve a diagnostic copy and remove a legacy/corrupt lock for manual recovery. Never delete `state.json`, Terraform state/locks, generated data, or kubeconfig to recover a workflow lock.
+
+The `state.json` schema and template contract are unchanged. Upgrade only after all old workflows and descendants finish. Old binaries do not understand v2 locks: for rollback, stop new workflows and descendants, preserve the v2 diagnostic lock outside the workspace, remove only the idle lock file, and restore the previous CLI binary with the same template pin and state. Do not run old and new versions concurrently. Binary rollback does not reverse infrastructure or restore data.
