@@ -7,10 +7,7 @@ import (
 )
 
 func TestSaveLoadAndResetPhase(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	inWorkspace(t)
 
 	st := &State{
 		TemplateSource:   "./template",
@@ -40,10 +37,7 @@ func TestSaveLoadAndResetPhase(t *testing.T) {
 }
 
 func TestAcquireLockReclaimsStaleLock(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	inWorkspace(t)
 	if err := os.MkdirAll(DirName, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -67,10 +61,7 @@ func TestAcquireLockReclaimsStaleLock(t *testing.T) {
 }
 
 func TestAcquireLockPreventsConcurrentWorkflow(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	inWorkspace(t)
 
 	lock, err := AcquireLock("apply")
 	if err != nil {
