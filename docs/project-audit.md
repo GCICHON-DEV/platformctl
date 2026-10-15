@@ -39,7 +39,7 @@ Pierwsza próba Go wymagała przeniesienia GOCACHE do /private/tmp ze względu n
 | Integralność plików | GenerateWithPrevious usuwa poprzednie pliki przed ukończeniem renderowania; kolizje i symlinki nie są kompletnie chronione. | PLAT-14, PLAT-15 |
 | Zaufanie szablonom | Pobieranie bez oczekiwanego digestu, cichy fallback cache, brak limitu ReadAll. Komenda+args nie tworzą sandboxa dla niezaufanego manifestu. | PLAT-17 |
 | Toolchain | Jeden plik binarny i target.tmp per nazwa; projekty z różnymi wersjami mogą kolidować. | PLAT-18 |
-| Preflight | Brak timeoutów commandCheck/credential; strict nie zwraca błędu po nieudanych localReadinessChecks. Apply nie uruchamia pełnego preflight. | PLAT-20 |
+| Preflight | Brak timeoutów commandCheck/credential. Apply nie uruchamia pełnego preflight; sam preflight --strict poprawnie zwraca błąd po nieudanych kontrolach lokalnych. | PLAT-20 |
 | Logi | stdout/stderr procesów są przekazywane bez redakcji; printSteps drukuje argumenty. | PLAT-19 |
 | Stan vs zdrowie | status odczytuje tylko lokalny JSON. Nie potwierdza nodes, aplikacji ani usług. | PLAT-22 |
 | Demo | Brak Argo Application/AppProject, demo app i rzeczywistego HTTP testu; brak własnego dashboardu/alertu. | PLAT-27, PLAT-28 |

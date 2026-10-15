@@ -283,7 +283,7 @@
       "track": "both",
       "title": "Naprawić preflight, timeouty i kontrolę tożsamości celu",
       "depends": [],
-      "evidence": "runPreflight/commandCheck używają exec.Command bez timeoutu; --strict nie zwraca błędu po nieudanych localReadinessChecks; apply nie wywołuje pełnego preflight.",
+      "evidence": "runPreflight/commandCheck używają exec.Command bez timeoutu; apply nie wywołuje pełnego preflight. Komenda preflight --strict poprawnie propaguje result.OK=false jako błąd.",
       "acceptance": [
         "Strict zwraca nonzero przy każdej wymaganej kontroli, z ograniczonym czasem.",
         "Kontrole zależą od fazy; świeży bootstrap nie wymaga już istniejącego klastra.",
