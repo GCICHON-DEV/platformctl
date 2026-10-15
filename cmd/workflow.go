@@ -6,9 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"os/signal"
-	"syscall"
 
 	"platformctl/internal/apperror"
 	"platformctl/internal/state"
@@ -20,18 +17,7 @@ func acquireWorkflowLock(phase string) (*state.Lock, error) {
 	if err != nil {
 		return nil, apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_WORKFLOW_LOCKED", "another platformctl workflow is already running")
 	}
-	setupLockSignalRelease(lock)
 	return lock, nil
-}
-
-func setupLockSignalRelease(lock *state.Lock) {
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-signals
-		_ = lock.Release()
-		os.Exit(130)
-	}()
 }
 
 func warnIfPlanChanged(resolved *templateengine.Resolved, st *state.State) []string {

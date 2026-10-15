@@ -154,8 +154,10 @@ The repo also includes a local custom template under `examples/local-templates/c
 - Steps have stable IDs, timeouts, optional retries, optional preflight metadata, and failure suggestions.
 - Logs mask common `password=`, `secret=`, `token=`, and `key=` assignments.
 - Local state is stored in `.platformctl/state.json`.
-- State writes are atomic and `apply`/`destroy` create `.platformctl/lock` to prevent concurrent workflows.
-- Stale `.platformctl/lock` files are reclaimed automatically when their PID no longer exists.
+- `init`, `plan`, `apply`/`up`, and `destroy`/`down` hold one workspace lock before loading configuration through the final state checkpoint. A competing command fails before changing configuration, generated files, or state.
+- State writes use a unique temporary file and atomic rename. A read-only `status` may observe the previous complete checkpoint while a workflow runs.
+- On Linux and macOS, `.platformctl/lock` is a persistent file protected by a nonblocking kernel `flock`; file existence and its PID metadata do not indicate an active workflow. Never unlink or replace it while a CLI or workflow step may be running. Workflow steps inherit descriptor 3, retaining the lock after a CLI crash until their last inherited copy closes. Steps must preserve this descriptor, remain synchronous, and not explicitly unlock it; daemons or tools that close inherited descriptors need their own lifecycle coordination.
+- A crash releases ownership once all inherited copies close. PID reuse cannot take over or strand a v2 kernel lock. Older PID-only locks are reclaimed only when their recorded PID is absent; a live/reused PID or malformed legacy lock fails closed. Upgrade and rollback require an idle workspace; never mix old and new binaries concurrently. See [lock recovery and rollback](docs/troubleshooting.md#workspace-lock-recovery-and-rollback).
 - Generated files are reconciled from tracked `managed_files`; `platformctl` no longer deletes the whole `generated/` directory.
 - `apply`/`destroy` warn when the current template checksum or generated files differ from the last recorded plan.
 - `apply --resume` and `destroy --resume` are rejected when the recorded plan hash differs from the current plan.

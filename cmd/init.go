@@ -27,6 +27,11 @@ func newInitCmd() *cobra.Command {
   platformctl init --template platformctl/aws-eks-standard --version v1.1.0 --project demo
   platformctl init --template ./examples/local-templates/custom-minimal --force`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			lock, err := acquireWorkflowLock("init")
+			if err != nil {
+				return err
+			}
+			defer lock.Release()
 			if templateSource == "" {
 				templateSource = "platformctl/local-kind-standard"
 			}

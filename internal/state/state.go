@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -108,45 +110,69 @@ func ResetPhase(st *State, phase string) {
 	st.CompletedSteps = map[string]bool{}
 }
 
+// Lock holds an exclusive kernel lock on a stable inode. Never unlink its path:
+// a contender may already have opened that inode. Metadata is diagnostic only.
 type Lock struct {
-	path string
+	file *os.File
+	once sync.Once
+	err  error
 }
+
+const lockFormat = "platformctl-lock-v2\n"
 
 func AcquireLock(operation string) (*Lock, error) {
 	if err := os.MkdirAll(DirName, 0755); err != nil {
 		return nil, fmt.Errorf("create state directory: %w", err)
 	}
-	for attempt := 0; attempt < 2; attempt++ {
-		file, err := os.OpenFile(LockPath(), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
-		if errors.Is(err, os.ErrExist) {
-			data, readErr := os.ReadFile(LockPath())
-			if readErr == nil {
-				if pid, ok := parseLockPID(string(data)); ok && !processExists(pid) {
-					if removeErr := os.Remove(LockPath()); removeErr == nil {
-						continue
-					}
-				}
-				return nil, fmt.Errorf("another platformctl workflow is running: %s", strings.TrimSpace(string(data)))
-			}
-			return nil, fmt.Errorf("another platformctl workflow is running")
-		}
-		if err != nil {
-			return nil, fmt.Errorf("create workflow lock: %w", err)
-		}
-		content := fmt.Sprintf("operation=%s pid=%s started_at=%s\n", operation, strconv.Itoa(os.Getpid()), time.Now().UTC().Format(time.RFC3339))
-		if _, err := file.WriteString(content); err != nil {
-			_ = file.Close()
-			_ = os.Remove(LockPath())
-			return nil, fmt.Errorf("write workflow lock: %w", err)
-		}
-		if err := file.Close(); err != nil {
-			_ = os.Remove(LockPath())
-			return nil, fmt.Errorf("close workflow lock: %w", err)
-		}
-		return &Lock{path: LockPath()}, nil
+	// O_NOFOLLOW prevents a workspace lock symlink from redirecting writes.
+	fd, err := syscall.Open(LockPath(), syscall.O_RDWR|syscall.O_CREAT|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("open workflow lock: %w", err)
 	}
-	return nil, fmt.Errorf("another platformctl workflow is running")
+	file := os.NewFile(uintptr(fd), LockPath())
+	fail := func(err error) (*Lock, error) { _ = file.Close(); return nil, err }
+	for {
+		err = syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
+		if err != syscall.EINTR {
+			break
+		}
+	}
+	if err != nil {
+		return fail(fmt.Errorf("another platformctl workflow is running (or locking is unavailable): %w", err))
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return fail(fmt.Errorf("inspect workflow lock: %w", err))
+	}
+	current, err := os.Lstat(LockPath())
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(info, current) {
+		return fail(fmt.Errorf("workflow lock path changed or is not a regular file"))
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return fail(fmt.Errorf("read workflow lock: %w", err))
+	}
+	// Older binaries use an existence/PID lock. Do not take over a live or
+	// unrecognizable legacy lock. PID reuse in this format fails closed.
+	if len(data) > 0 && !strings.HasPrefix(string(data), lockFormat) {
+		pid, ok := parseLockPID(string(data))
+		if !ok || processExists(pid) {
+			return fail(fmt.Errorf("legacy workflow lock requires an idle workspace: %s", strings.TrimSpace(string(data))))
+		}
+	}
+	content := fmt.Sprintf("%soperation=%s pid=%d started_at=%s\n", lockFormat, operation, os.Getpid(), time.Now().UTC().Format(time.RFC3339Nano))
+	if err := file.Truncate(0); err != nil {
+		return fail(fmt.Errorf("truncate workflow lock: %w", err))
+	}
+	if _, err := file.WriteAt([]byte(content), 0); err != nil {
+		return fail(fmt.Errorf("write workflow lock: %w", err))
+	}
+	return &Lock{file: file}, nil
 }
+
+// File is borrowed by the synchronous step runner through exec.Cmd.ExtraFiles.
+// A surviving step retains the lock after a CLI crash until it closes its copy.
+func (l *Lock) File() *os.File { return l.file }
 
 func parseLockPID(content string) (int, bool) {
 	for _, token := range strings.Fields(content) {
@@ -178,12 +204,16 @@ func processExists(pid int) bool {
 	return true
 }
 
+// Release closes only our descriptor. Explicit LOCK_UN would also unlock copies
+// inherited by a still-running child. Repeated Release cannot affect a new owner.
 func (l *Lock) Release() error {
-	if l == nil || l.path == "" {
+	if l == nil {
 		return nil
 	}
-	if err := os.Remove(l.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("release workflow lock: %w", err)
-	}
-	return nil
+	l.once.Do(func() {
+		if err := l.file.Close(); err != nil {
+			l.err = fmt.Errorf("release workflow lock: %w", err)
+		}
+	})
+	return l.err
 }
