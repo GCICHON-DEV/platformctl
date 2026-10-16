@@ -51,6 +51,11 @@ Nie jest to pełny audyt bezpieczeństwa ani dowód exploitów. Ryzyka ścieżek
 
 ## Dwa poziomy ukończenia
 
+Aktualna specyfikacja docelowa: [wymagania v1 i macierz odbioru (PLAT-9)](requirements-v1.md).
+Zawiera przegląd driftu względem baz tego audytu, identyfikatory wymagań,
+scenariusze odbioru i rejestr niepotwierdzonych wymagań akademickich.
+Poniższy audyt zachowuje historyczny stan i wyniki z 2026-10-15.
+
 Portfolio: instalowalne wydanie CLI, bezpieczny lifecycle, prawdziwe lokalne E2E, aplikacja przez GitOps i ingress, monitoring, pokaz awarii/resume, architektura, scenariusz i materiały demo. Wymaga zadań oznaczonych portfolio, w tym wspólnych both. Weryfikacja odbywa się z czystej instalacji; nie wymaga stale działającego płatnego klastra.
 
 Projekt inżynierski: poziom portfolio oraz zweryfikowany EKS z kontrolą danych/kosztów/teardown, formalne wymagania, porównanie z ręcznym bootstrapem, powtarzane pomiary, traceability i opracowanie według wytycznych uczelni. Nie ma jeszcze potwierdzonych wytycznych promotora ani zaakceptowanych wyników eksperymentów.
