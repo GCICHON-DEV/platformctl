@@ -226,6 +226,7 @@ go build -o platformctl .
 
 ## Development and completion plan
 
+- [v1 requirements, scope and acceptance matrix (PLAT-9)](docs/requirements-v1.md)
 - [Contribution and delivery flow](CONTRIBUTING.md)
 - [Project audit and portfolio/engineering backlog](docs/project-audit.md)
 - [Machine-readable planning backlog](docs/backlog.json)
