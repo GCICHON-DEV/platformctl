@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -67,6 +69,70 @@ func TestStatusCommandSupportsJSON(t *testing.T) {
 		t.Fatalf("status command returned error: %v", err)
 	}
 	if !strings.Contains(out.String(), `"ok": true`) {
+		t.Fatalf("status JSON missing ok=true: %s", out.String())
+	}
+}
+
+func TestStatusJSONPreservesExistingDirectory(t *testing.T) {
+	root := t.TempDir()
+	writeCLIFile(t, filepath.Join(root, "notes.txt"), "keep these notes\n")
+	writeCLIFile(t, filepath.Join(root, "nested", "data.bin"), "\x00\x01\xff\n")
+	mkdir(t, filepath.Join(root, "empty"))
+
+	type entry struct {
+		Mode os.FileMode
+		Data string
+	}
+	snapshotDirectory := func() map[string]entry {
+		t.Helper()
+		entries := make(map[string]entry)
+		err := filepath.WalkDir(root, func(path string, item os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			info, err := item.Info()
+			if err != nil {
+				return err
+			}
+			value := entry{Mode: info.Mode()}
+			if !item.IsDir() {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				value.Data = string(data)
+			}
+			entries[rel] = value
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("snapshot directory: %v", err)
+		}
+		return entries
+	}
+	before := snapshotDirectory()
+
+	var out, stderr bytes.Buffer
+	command := workflowProcess(t, root, "status", "--json")
+	command.Stdout = &out
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("status --json failed: %v\n%s", err, stderr.String())
+	}
+	if after := snapshotDirectory(); !reflect.DeepEqual(before, after) {
+		t.Errorf("status --json changed directory: before=%#v after=%#v", before, after)
+	}
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &response); err != nil {
+		t.Fatalf("invalid status JSON: %v\n%s", err, out.String())
+	}
+	if !response.OK {
 		t.Fatalf("status JSON missing ok=true: %s", out.String())
 	}
 }
