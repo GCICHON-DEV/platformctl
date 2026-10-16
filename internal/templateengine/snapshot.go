@@ -108,6 +108,32 @@ func targetDigest(plan *ExecutionPlan) (string, error) {
 		dockerConfig = filepath.Join(home, ".docker")
 	}
 	paths = append(paths, filepath.Join(dockerConfig, "config.json"))
+	// Tools resolve relative environment paths from their own working
+	// directory, which can differ from the CLI workspace.
+	directories := []string{"."}
+	for _, steps := range [][]PlannedStep{plan.PlanSteps, plan.ApplySteps, plan.DestroySteps} {
+		for _, step := range steps {
+			directory, err := stepWorkingDirectory(step)
+			if err != nil {
+				return "", err
+			}
+			directories = append(directories, step.Dir, directory)
+		}
+	}
+	inheritedPaths := paths
+	paths = nil
+	for _, path := range inheritedPaths {
+		if path == "" {
+			continue
+		}
+		if filepath.IsAbs(path) {
+			paths = append(paths, path)
+			continue
+		}
+		for _, directory := range directories {
+			paths = append(paths, filepath.Join(directory, path))
+		}
+	}
 	for _, steps := range [][]PlannedStep{plan.PlanSteps, plan.ApplySteps, plan.DestroySteps} {
 		for _, step := range steps {
 			for index, arg := range step.Args {
@@ -126,12 +152,16 @@ func targetDigest(plan *ExecutionPlan) (string, error) {
 				}
 			}
 			if filepath.Base(step.Command) == "terraform" {
+				directory, err := stepWorkingDirectory(step)
+				if err != nil {
+					return "", err
+				}
 				dataDir := os.Getenv("TF_DATA_DIR")
 				if dataDir == "" {
 					dataDir = ".terraform"
 				}
 				if !filepath.IsAbs(dataDir) {
-					dataDir = filepath.Join(step.Dir, dataDir)
+					dataDir = filepath.Join(directory, dataDir)
 				}
 				paths = append(paths, filepath.Join(dataDir, "environment"))
 			}
@@ -174,4 +204,41 @@ func targetDigest(plan *ExecutionPlan) (string, error) {
 		Workspace          string
 		Environment, Files map[string]string
 	}{workspace, environment, files})
+}
+
+// Terraform applies its global -chdir before resolving per-directory data.
+func stepWorkingDirectory(step PlannedStep) (string, error) {
+	directory := step.Dir
+	if filepath.Base(step.Command) != "terraform" {
+		return directory, nil
+	}
+	found := false
+	for index := 0; index < len(step.Args); index++ {
+		arg := step.Args[index]
+		path := ""
+		switch {
+		case strings.HasPrefix(arg, "-chdir="):
+			path = strings.TrimPrefix(arg, "-chdir=")
+		case arg == "-chdir":
+			index++
+			if index >= len(step.Args) {
+				return "", fmt.Errorf("terraform -chdir requires a directory")
+			}
+			path = step.Args[index]
+		default:
+			continue
+		}
+		if found {
+			return "", fmt.Errorf("multiple terraform -chdir options are not supported")
+		}
+		found = true
+		if path != "" {
+			if filepath.IsAbs(path) {
+				directory = path
+			} else {
+				directory = filepath.Join(step.Dir, path)
+			}
+		}
+	}
+	return directory, nil
 }

@@ -79,9 +79,7 @@ template:
 values:
   project_name: demo
 `)
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
-	}
+	chdirForTest(t, root)
 
 	resolved, err := Load("platform.yaml")
 	if err != nil {
@@ -254,9 +252,7 @@ func TestValidateRejectsUnsafeCredentialCommand(t *testing.T) {
 
 func TestGenerateWithPreviousKeepsUnmanagedFiles(t *testing.T) {
 	root := t.TempDir()
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
-	}
+	chdirForTest(t, root)
 	writeFile(t, filepath.Join(root, "generated", "managed-old.txt"), "old")
 	writeFile(t, filepath.Join(root, "generated", "manual.txt"), "manual")
 
@@ -341,4 +337,20 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(strings.TrimLeft(content, "\n")), 0644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func chdirForTest(t *testing.T, directory string) {
+	t.Helper()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Error(err)
+		}
+	})
 }

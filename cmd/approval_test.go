@@ -355,3 +355,86 @@ func TestTargetDriftPreventsRetryAgainstChangedContext(t *testing.T) {
 		t.Fatal("retry ran against a changed target")
 	}
 }
+
+func TestRelativeTargetEnvironmentUsesStepDirectory(t *testing.T) {
+	for _, phase := range []string{"apply", "destroy"} {
+		for _, selection := range []string{"KUBECONFIG", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "DOCKER_CONFIG"} {
+			t.Run(phase+"/"+selection, func(t *testing.T) {
+				root := setupCLITemplate(t)
+				path := filepath.Join(root, "template", "platform.template.yaml")
+				data, _ := os.ReadFile(path)
+				// The root-level decoy must not hide changes to the effective target.
+				configPath := "target.yaml"
+				if selection == "DOCKER_CONFIG" {
+					configPath = "target.yaml/config.json"
+				}
+				writeCLIFile(t, filepath.Join(root, configPath), "root configuration")
+				actual := filepath.Join(root, "generated", "work", configPath)
+				writeCLIFile(t, actual, "first target")
+				writeCLIFile(t, path, strings.ReplaceAll(string(data), "      command: echo", "      dir: generated/work\n      command: echo"))
+				t.Setenv(selection, "target.yaml")
+				mustApproval(t, root, "plan")
+				mustApproval(t, root, phase, "--yes")
+				writeCLIFile(t, actual, "different effective target")
+				before := approvalFiles(t, root)
+				for _, extra := range [][]string{nil, {"--resume"}} {
+					args := append([]string{phase, "--yes"}, extra...)
+					out, err := runApproval(t, root, "", args...)
+					if err == nil || (!strings.Contains(out, "PLATFORMCTL_PLAN_CHANGED") && !strings.Contains(out, "PLATFORMCTL_RESUME_INVALID")) {
+						t.Fatalf("relative target drift accepted: %v %s", err, out)
+					}
+					if !reflect.DeepEqual(before, approvalFiles(t, root)) {
+						t.Fatal("target rejection changed files")
+					}
+				}
+			})
+		}
+	}
+
+}
+
+func TestTerraformChdirBindsEffectiveWorkspace(t *testing.T) {
+	for _, phase := range []string{"apply", "destroy"} {
+		for _, dataDir := range []string{"", "relative-data"} {
+			t.Run(phase+"/"+dataDir, func(t *testing.T) {
+				root := setupCLITemplate(t)
+				// Local executable fixture, never real Terraform or cloud operations.
+				shimDir := filepath.Join(root, "tools")
+				shim := filepath.Join(shimDir, "terraform")
+				writeCLIFile(t, shim, "#!/bin/sh\nexit 0\n")
+				if err := os.Chmod(shim, 0755); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+				t.Setenv("TF_DATA_DIR", dataDir)
+				selected := dataDir
+				if selected == "" {
+					selected = ".terraform"
+				}
+				actual := filepath.Join(root, "generated", "work", "module", selected, "environment")
+				writeCLIFile(t, actual, "first")
+				// Decoy directory that the initial implementation incorrectly hashed.
+				writeCLIFile(t, filepath.Join(root, "generated", "work", selected, "environment"), "unchanged")
+				path := filepath.Join(root, "template", "platform.template.yaml")
+				data, _ := os.ReadFile(path)
+				changed := strings.ReplaceAll(string(data), "      command: echo", "      dir: generated/work\n      command: terraform")
+				changed = strings.ReplaceAll(changed, `args: [`, `args: ["-chdir=module", `)
+				writeCLIFile(t, path, changed)
+				mustApproval(t, root, "plan")
+				mustApproval(t, root, phase, "--yes")
+				writeCLIFile(t, actual, "changed-target-workspace")
+				before := approvalFiles(t, root)
+				for _, extra := range [][]string{nil, {"--resume"}} {
+					args := append([]string{phase, "--yes"}, extra...)
+					out, err := runApproval(t, root, "", args...)
+					if err == nil || (!strings.Contains(out, "PLATFORMCTL_PLAN_CHANGED") && !strings.Contains(out, "PLATFORMCTL_RESUME_INVALID")) {
+						t.Fatalf("Terraform -chdir drift accepted: %v %s", err, out)
+					}
+					if !reflect.DeepEqual(before, approvalFiles(t, root)) {
+						t.Fatal("rejection mutated files")
+					}
+				}
+			})
+		}
+	}
+}
