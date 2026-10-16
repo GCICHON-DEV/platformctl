@@ -3,7 +3,6 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"platformctl/internal/apperror"
 	"platformctl/internal/state"
 )
 
@@ -27,7 +27,7 @@ func TestWorkflowProcess(t *testing.T) {
 	}
 	rootCmd.SetArgs(args[1:])
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		apperror.Render(os.Stderr, err, options.Verbose, options.JSON)
 		os.Exit(1)
 	}
 	os.Exit(0)

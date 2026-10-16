@@ -11,7 +11,7 @@ import (
 func newPlanCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:           "plan",
-		Short:         "Render files and show the platform execution plan",
+		Short:         "Render a CLI workflow preview (does not run terraform plan)",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Example: `  platformctl plan
@@ -29,32 +29,25 @@ func newPlanCmd() *cobra.Command {
 			if err := resolved.Validate(); err != nil {
 				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_TEMPLATE_INVALID", "template validation failed")
 			}
-			if _, _, err := ensureToolchain(cmd, resolved, false); err != nil {
-				return err
-			}
-			if _, err := resolved.RenderedFilePaths(); err == nil {
-				printf(cmd, "Rendering generated files under generated/. Existing generated output may be replaced.\n")
-			}
 			st, err := state.Load()
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_STATE_LOAD", "could not load local state")
-			}
-			written, err := resolved.GenerateWithPrevious(st.ManagedFiles)
-			if err != nil {
-				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_GENERATE_FAILED", "could not render generated files")
 			}
 			plan, err := resolved.BuildPlan()
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_PLAN_BUILD_FAILED", "could not build execution plan")
 			}
-			plan.GeneratedFiles = written
-			planHash, err := executionPlanHash(plan)
+			written, err := plan.GenerateWithPrevious(st.ManagedFiles)
 			if err != nil {
-				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_PLAN_HASH", "could not hash execution plan")
+				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_GENERATE_FAILED", "could not render preview files")
 			}
+			planHash := plan.Digest
 			hash, err := resolved.GeneratedHash()
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_GENERATED_HASH", "could not hash generated files")
+			}
+			if hash != plan.GeneratedDigest {
+				return apperror.New(apperror.CategoryState, "PLATFORMCTL_PLAN_CHANGED", "generated files no longer match captured preview bytes")
 			}
 			st.TemplateSource = resolved.Info.Resolved
 			st.TemplateVersion = resolved.Info.Version
@@ -62,6 +55,9 @@ func newPlanCmd() *cobra.Command {
 			st.GeneratedHash = hash
 			st.ManagedFiles = written
 			st.LastPlanHash = planHash
+			st.PlanFormat = plan.Format
+			st.ApprovedPlanHash = ""
+			st.ApprovedPhase = ""
 			st.LastPhase = "plan"
 			st.CompletedSteps = map[string]bool{}
 			if err := state.Save(st); err != nil {

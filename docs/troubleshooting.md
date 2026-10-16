@@ -83,7 +83,11 @@ platformctl apply --resume
 platformctl destroy --resume
 ```
 
-`platformctl` warns when generated files or the template checksum differ from the last recorded plan. Resume is rejected when the plan hash changed. In that case, run `platformctl plan` again, then run `apply` or `destroy` without `--resume`.
+`apply` and `destroy` reject changed recorded previews or edited/missing managed files before tool installation or mutation. The v2 digest binds rendered/source bytes, inputs, steps and local target selectors. Resume also requires a matching approval for that phase. Preserve state and inspect any partially completed resources before running `platformctl plan` again, then approve `apply` or `destroy` without `--resume`; re-planning clears checkpoints and is not resource reconciliation.
+
+`platformctl plan` is a CLI preview: it renders files and records a digest, but does not install tools, execute `steps.plan`, or run `terraform plan`. Approval is not evidence of a saved Terraform plan. Legacy state has no v2 approval evidence and requires explicit re-planning. See [preview state upgrade and rollback](../README.md#preview-state-upgrade-and-rollback).
+
+Changing kubeconfig, AWS config/profile, Terraform environment selectors or declared target inputs invalidates approval. This includes changes made by a running step: execution stops before the next step and preserves completed checkpoints. Inspect the target and review the new preview instead of editing approval hashes or bypassing the check.
 
 
 ## Workspace Lock Recovery And Rollback

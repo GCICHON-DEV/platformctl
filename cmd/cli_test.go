@@ -13,9 +13,7 @@ import (
 
 func TestPlanCommandRendersLocalTemplateAndState(t *testing.T) {
 	root := setupCLITemplate(t)
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
-	}
+	chdirForTest(t, root)
 
 	cmd := newPlanCmd()
 	var out bytes.Buffer
@@ -37,9 +35,7 @@ func TestPlanCommandRendersLocalTemplateAndState(t *testing.T) {
 
 func TestApplyCommandRunsEchoTemplateAndUpAliasExists(t *testing.T) {
 	root := setupCLITemplate(t)
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
-	}
+	chdirForTest(t, root)
 
 	cmd := newApplyCmd()
 	if len(cmd.Aliases) != 1 || cmd.Aliases[0] != "up" {
@@ -59,9 +55,7 @@ func TestApplyCommandRunsEchoTemplateAndUpAliasExists(t *testing.T) {
 
 func TestStatusCommandSupportsJSON(t *testing.T) {
 	root := setupCLITemplate(t)
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
-	}
+	chdirForTest(t, root)
 	options.JSON = true
 	t.Cleanup(func() { options = cliOptions{} })
 
@@ -86,9 +80,7 @@ func TestPreflightCommandHasDoctorAlias(t *testing.T) {
 
 func TestApplyResumeFailsWhenPlanChanges(t *testing.T) {
 	root := setupCLITemplate(t)
-	if err := os.Chdir(root); err != nil {
-		t.Fatal(err)
-	}
+	chdirForTest(t, root)
 
 	planCmd := newPlanCmd()
 	var planOut bytes.Buffer
@@ -199,4 +191,20 @@ func writeCLIFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(strings.TrimLeft(content, "\n")), 0644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func chdirForTest(t *testing.T, directory string) {
+	t.Helper()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Error(err)
+		}
+	})
 }

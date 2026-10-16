@@ -20,7 +20,7 @@ func newApplyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "apply",
 		Aliases:       []string{"up"},
-		Short:         "Create or update the platform from an approved plan",
+		Short:         "Preview and approve a platform workflow before execution",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Example: `  platformctl apply
@@ -39,32 +39,17 @@ func newApplyCmd() *cobra.Command {
 			if err := resolved.Validate(); err != nil {
 				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_TEMPLATE_INVALID", "template validation failed")
 			}
-			manager, _, err := ensureToolchain(cmd, resolved, true)
-			if err != nil {
-				return err
-			}
-			runner := executor.NewRunner(workflowStdout(cmd.OutOrStdout(), cmd.ErrOrStderr()), cmd.ErrOrStderr()).WithPathEnv(manager.PathEnv()).WithWorkflowLock(lock.File())
-			if err := runner.RequireTools(resolved.RequiredTools()...); err != nil {
-				return apperror.Wrap(err, apperror.CategoryDependency, "PLATFORMCTL_MISSING_TOOLS", "required tools are missing")
-			}
 			st, err := state.Load()
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_STATE_LOAD", "could not load local state")
-			}
-			planWarnings := warnIfPlanChanged(resolved, st)
-			printPlanWarnings(cmd.OutOrStdout(), planWarnings)
-			written, err := resolved.GenerateWithPrevious(st.ManagedFiles)
-			if err != nil {
-				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_GENERATE_FAILED", "could not render generated files")
 			}
 			plan, err := resolved.BuildPlan()
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_PLAN_BUILD_FAILED", "could not build execution plan")
 			}
-			plan.GeneratedFiles = written
-			planHash, err := executionPlanHash(plan)
-			if err != nil {
-				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_PLAN_HASH", "could not hash execution plan")
+			planHash := plan.Digest
+			if err := validateRecordedPlan(resolved, plan, st, "apply", resume); err != nil {
+				return err
 			}
 			if !options.JSON {
 				printExecutionPlan(cmd.OutOrStdout(), plan)
@@ -76,7 +61,7 @@ func newApplyCmd() *cobra.Command {
 				)
 			}
 			if !yes {
-				ok, err := confirm(cmd, "Apply this platform plan?")
+				ok, err := confirm(cmd, "Approve this CLI workflow preview and apply?")
 				if err != nil {
 					return err
 				}
@@ -85,11 +70,33 @@ func newApplyCmd() *cobra.Command {
 					return nil
 				}
 			}
-			if resume && st.LastPlanHash != "" && st.LastPlanHash != planHash {
-				return apperror.WithRemediation(
-					apperror.New(apperror.CategoryState, "PLATFORMCTL_RESUME_INVALID", "apply --resume cannot continue because the execution plan changed"),
-					"Run platformctl plan, then run platformctl apply without --resume.",
-				)
+			// Re-read after interactive confirmation: external editors do not take
+			// the workflow lock. Execute the captured bytes/steps only.
+			current, err := verifyPlanSnapshot(plan)
+			if err != nil {
+				return err
+			}
+			if err := validateRecordedPlan(current, plan, st, "apply", resume); err != nil {
+				return err
+			}
+			manager, _, err := ensureToolchain(cmd, resolved, true)
+			if err != nil {
+				return err
+			}
+			runner := executor.NewRunner(workflowStdout(cmd.OutOrStdout(), cmd.ErrOrStderr()), cmd.ErrOrStderr()).WithPathEnv(manager.PathEnv()).WithWorkflowLock(lock.File())
+			if err := runner.RequireTools(resolved.RequiredTools()...); err != nil {
+				return apperror.Wrap(err, apperror.CategoryDependency, "PLATFORMCTL_MISSING_TOOLS", "required tools are missing")
+			}
+			current, err = verifyPlanSnapshot(plan)
+			if err != nil {
+				return err
+			}
+			if err := validateRecordedPlan(current, plan, st, "apply", resume); err != nil {
+				return err
+			}
+			written, err := plan.GenerateWithPrevious(st.ManagedFiles)
+			if err != nil {
+				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_GENERATE_FAILED", "could not write approved preview")
 			}
 
 			if !resume || st.LastPhase != "apply" {
@@ -99,17 +106,29 @@ func newApplyCmd() *cobra.Command {
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_GENERATED_HASH", "could not hash generated files")
 			}
+			if hash != plan.GeneratedDigest {
+				return apperror.New(apperror.CategoryState, "PLATFORMCTL_PLAN_CHANGED", "generated files no longer match captured preview bytes")
+			}
 			st.TemplateSource = resolved.Info.Resolved
 			st.TemplateVersion = resolved.Info.Version
 			st.TemplateChecksum = resolved.Info.Checksum
 			st.GeneratedHash = hash
 			st.ManagedFiles = written
 			st.LastPlanHash = planHash
+			st.PlanFormat = plan.Format
+			st.ApprovedPlanHash = planHash
+			st.ApprovedPhase = "apply"
 			if err := state.Save(st); err != nil {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_STATE_SAVE", "could not save local state")
 			}
 
-			if err := resolved.RunSteps(runner, "apply", st.CompletedSteps, func(stepID string) error {
+			if err := templateengine.RunPlannedSteps(runner, "apply", plan.ApplySteps, st.CompletedSteps, func() error {
+				current, err := verifyPlanSnapshot(plan)
+				if err != nil {
+					return err
+				}
+				return validateRecordedPlan(current, plan, st, "apply", resume)
+			}, func(stepID string) error {
 				st.CompletedSteps[stepID] = true
 				st.LastPhase = "apply"
 				return state.Save(st)
@@ -134,7 +153,7 @@ func newApplyCmd() *cobra.Command {
 					"success_messages": resolved.SuccessMessages(),
 					"notes":            resolved.NoteMessages(),
 					"next_steps":       resolved.NextStepMessages(),
-					"warnings":         planWarnings,
+					"warnings":         plan.Warnings,
 				})
 			}
 			return nil

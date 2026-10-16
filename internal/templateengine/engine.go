@@ -152,6 +152,15 @@ type Resolved struct {
 }
 
 type ExecutionPlan struct {
+	GeneratedDigest string            `json:"generated_digest"`
+	Format          string            `json:"format"`
+	Digest          string            `json:"digest"`
+	InputsDigest    string            `json:"inputs_digest"`
+	TargetDigest    string            `json:"target_digest"`
+	FileDigests     map[string]string `json:"file_digests"`
+	SourceDigests   map[string]string `json:"source_digests,omitempty"`
+	contents        map[string]string
+
 	TemplateName    string        `json:"template_name"`
 	TemplateSource  SourceInfo    `json:"template_source"`
 	GeneratedFiles  []string      `json:"generated_files"`
@@ -470,7 +479,7 @@ func (r *Resolved) BuildPlan() (*ExecutionPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ExecutionPlan{
+	plan := &ExecutionPlan{
 		TemplateName:    r.Manifest.Name,
 		TemplateSource:  r.Info,
 		GeneratedFiles:  generated,
@@ -481,7 +490,11 @@ func (r *Resolved) BuildPlan() (*ExecutionPlan, error) {
 		ApplySteps:      applySteps,
 		DestroySteps:    destroySteps,
 		SuccessMessages: r.SuccessMessages(),
-	}, nil
+	}
+	if err := r.snapshot(plan); err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 func (r *Resolved) RenderedFilePaths() ([]string, error) {
@@ -501,36 +514,34 @@ func (r *Resolved) Generate() ([]string, error) {
 }
 
 func (r *Resolved) GenerateWithPrevious(previousManaged []string) ([]string, error) {
+	plan, err := r.BuildPlan()
+	if err != nil {
+		return nil, err
+	}
+	return plan.GenerateWithPrevious(previousManaged)
+}
+
+// GenerateWithPrevious writes only the bytes captured in this preview.
+func (p *ExecutionPlan) GenerateWithPrevious(previousManaged []string) ([]string, error) {
 	desired := map[string]bool{}
-	for _, file := range r.Manifest.Files {
-		if err := validateGeneratedPath(file.Path); err != nil {
-			return nil, err
-		}
-		desired[filepath.Clean(file.Path)] = true
+	for _, path := range p.GeneratedFiles {
+		desired[path] = true
 	}
 	if err := reconcileManagedFiles(previousManaged, desired); err != nil {
 		return nil, err
 	}
-
-	written := make([]string, 0, len(r.Manifest.Files))
-	for _, file := range r.Manifest.Files {
-		if err := validateGeneratedPath(file.Path); err != nil {
+	for _, path := range p.GeneratedFiles {
+		if err := validateGeneratedPath(path); err != nil {
 			return nil, err
 		}
-		content, err := r.renderGeneratedFile(file)
-		if err != nil {
-			return nil, fmt.Errorf("render %s: %w", file.Path, err)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return nil, err
 		}
-		if err := os.MkdirAll(filepath.Dir(file.Path), 0755); err != nil {
-			return nil, fmt.Errorf("create directory for %s: %w", file.Path, err)
+		if err := os.WriteFile(path, []byte(p.contents[path]), 0644); err != nil {
+			return nil, err
 		}
-		if err := os.WriteFile(file.Path, []byte(content), 0644); err != nil {
-			return nil, fmt.Errorf("write %s: %w", file.Path, err)
-		}
-		written = append(written, filepath.Clean(file.Path))
 	}
-	sort.Strings(written)
-	return written, nil
+	return append([]string{}, p.GeneratedFiles...), nil
 }
 
 func reconcileManagedFiles(previousManaged []string, desired map[string]bool) error {
@@ -587,11 +598,20 @@ func (r *Resolved) StepsFor(phase string) []Step {
 }
 
 func (r *Resolved) RunSteps(runner *executor.Runner, phase string, skipCompleted map[string]bool, markCompleted func(string) error) error {
-	steps := r.StepsFor(phase)
-	for i, step := range steps {
-		planned, err := r.planStep(i, step)
-		if err != nil {
-			return err
+	steps, err := r.plannedSteps(phase)
+	if err != nil {
+		return err
+	}
+	return RunPlannedSteps(runner, phase, steps, skipCompleted, nil, markCompleted)
+}
+
+// RunPlannedSteps executes the captured steps without re-rendering template input.
+func RunPlannedSteps(runner *executor.Runner, phase string, steps []PlannedStep, skipCompleted map[string]bool, beforeStep func() error, markCompleted func(string) error) error {
+	for _, planned := range steps {
+		if beforeStep != nil {
+			if err := beforeStep(); err != nil {
+				return err
+			}
 		}
 		stepID := StepID(phase, planned.Index, planned.Name)
 		if planned.ID != "" {
@@ -601,7 +621,7 @@ func (r *Resolved) RunSteps(runner *executor.Runner, phase string, skipCompleted
 			fmt.Fprintf(runner.Stdout, "\n==> skipping completed step %s\n", stepID)
 			continue
 		}
-		err = runPlannedStep(runner, phase, stepID, planned)
+		err := runPlannedStep(runner, phase, stepID, planned, beforeStep)
 		if err != nil {
 			return apperror.WithRemediation(
 				apperror.WithContext(
@@ -620,7 +640,7 @@ func (r *Resolved) RunSteps(runner *executor.Runner, phase string, skipCompleted
 	return nil
 }
 
-func runPlannedStep(runner *executor.Runner, phase, stepID string, planned PlannedStep) error {
+func runPlannedStep(runner *executor.Runner, phase, stepID string, planned PlannedStep, beforeAttempt func() error) error {
 	attempts := 1
 	if planned.Retry != nil {
 		attempts = planned.Retry.Attempts
@@ -634,6 +654,11 @@ func runPlannedStep(runner *executor.Runner, phase, stepID string, planned Plann
 			fmt.Fprintf(runner.Stdout, "\n==> retrying %s (%d/%d)\n", stepID, attempt, attempts)
 			if planned.Retry != nil && planned.Retry.DelaySeconds > 0 {
 				time.Sleep(time.Duration(planned.Retry.DelaySeconds) * time.Second)
+			}
+		}
+		if beforeAttempt != nil {
+			if err := beforeAttempt(); err != nil {
+				return err
 			}
 		}
 		err = runner.RunStepWithOptions(executor.StepOptions{
@@ -817,6 +842,14 @@ func resumeSuggestion(phase, stepSuggestion string) string {
 }
 
 func (r *Resolved) renderGeneratedFile(file GeneratedFile) (string, error) {
+	raw, err := r.generatedSource(file)
+	if err != nil {
+		return "", err
+	}
+	return r.Render(raw)
+}
+
+func (r *Resolved) generatedSource(file GeneratedFile) (string, error) {
 	raw := file.Content
 	if file.Source != "" {
 		if r.Info.BaseDir == "" {
@@ -832,7 +865,7 @@ func (r *Resolved) renderGeneratedFile(file GeneratedFile) (string, error) {
 		}
 		raw = string(data)
 	}
-	return r.Render(raw)
+	return raw, nil
 }
 
 func normalizeManifest(manifest *Manifest) {
