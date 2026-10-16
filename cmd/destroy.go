@@ -35,35 +35,20 @@ func newDestroyCmd() *cobra.Command {
 			if err := resolved.Validate(); err != nil {
 				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_TEMPLATE_INVALID", "template validation failed")
 			}
-			manager, _, err := ensureToolchain(cmd, resolved, true)
-			if err != nil {
-				return err
-			}
-			runner := executor.NewRunner(workflowStdout(cmd.OutOrStdout(), cmd.ErrOrStderr()), cmd.ErrOrStderr()).WithPathEnv(manager.PathEnv()).WithWorkflowLock(lock.File())
-			if err := runner.RequireTools(resolved.RequiredTools()...); err != nil {
-				return apperror.Wrap(err, apperror.CategoryDependency, "PLATFORMCTL_MISSING_TOOLS", "required tools are missing")
-			}
 			st, err := state.Load()
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_STATE_LOAD", "could not load local state")
-			}
-			planWarnings := warnIfPlanChanged(resolved, st)
-			printPlanWarnings(cmd.OutOrStdout(), planWarnings)
-			written, err := resolved.GenerateWithPrevious(st.ManagedFiles)
-			if err != nil {
-				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_GENERATE_FAILED", "could not render generated files")
 			}
 			plan, err := resolved.BuildPlan()
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_PLAN_BUILD_FAILED", "could not build execution plan")
 			}
-			plan.GeneratedFiles = written
-			planHash, err := executionPlanHash(plan)
-			if err != nil {
-				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_PLAN_HASH", "could not hash execution plan")
+			planHash := plan.Digest
+			if err := validateRecordedPlan(resolved, plan, st, "destroy", resume); err != nil {
+				return err
 			}
 			if !options.JSON {
-				printSteps(cmd.OutOrStdout(), "Destroy steps", plan.DestroySteps)
+				printExecutionPlan(cmd.OutOrStdout(), plan)
 			}
 			if options.JSON && !yes {
 				return apperror.WithRemediation(
@@ -72,7 +57,7 @@ func newDestroyCmd() *cobra.Command {
 				)
 			}
 			if !yes {
-				ok, err := confirm(cmd, "Destroy this platform?")
+				ok, err := confirm(cmd, "Approve this CLI workflow preview and destroy?")
 				if err != nil {
 					return err
 				}
@@ -81,11 +66,33 @@ func newDestroyCmd() *cobra.Command {
 					return nil
 				}
 			}
-			if resume && st.LastPlanHash != "" && st.LastPlanHash != planHash {
-				return apperror.WithRemediation(
-					apperror.New(apperror.CategoryState, "PLATFORMCTL_RESUME_INVALID", "destroy --resume cannot continue because the execution plan changed"),
-					"Run platformctl plan, then run platformctl destroy without --resume.",
-				)
+			// Re-read after interactive confirmation: external editors do not take
+			// the workflow lock. Execute the captured bytes/steps only.
+			current, err := verifyPlanSnapshot(plan)
+			if err != nil {
+				return err
+			}
+			if err := validateRecordedPlan(current, plan, st, "destroy", resume); err != nil {
+				return err
+			}
+			manager, _, err := ensureToolchain(cmd, resolved, true)
+			if err != nil {
+				return err
+			}
+			runner := executor.NewRunner(workflowStdout(cmd.OutOrStdout(), cmd.ErrOrStderr()), cmd.ErrOrStderr()).WithPathEnv(manager.PathEnv()).WithWorkflowLock(lock.File())
+			if err := runner.RequireTools(resolved.RequiredTools()...); err != nil {
+				return apperror.Wrap(err, apperror.CategoryDependency, "PLATFORMCTL_MISSING_TOOLS", "required tools are missing")
+			}
+			current, err = verifyPlanSnapshot(plan)
+			if err != nil {
+				return err
+			}
+			if err := validateRecordedPlan(current, plan, st, "destroy", resume); err != nil {
+				return err
+			}
+			written, err := plan.GenerateWithPrevious(st.ManagedFiles)
+			if err != nil {
+				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_GENERATE_FAILED", "could not write approved preview")
 			}
 
 			if !resume || st.LastPhase != "destroy" {
@@ -95,17 +102,29 @@ func newDestroyCmd() *cobra.Command {
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_GENERATED_HASH", "could not hash generated files")
 			}
+			if hash != plan.GeneratedDigest {
+				return apperror.New(apperror.CategoryState, "PLATFORMCTL_PLAN_CHANGED", "generated files no longer match captured preview bytes")
+			}
 			st.TemplateSource = resolved.Info.Resolved
 			st.TemplateVersion = resolved.Info.Version
 			st.TemplateChecksum = resolved.Info.Checksum
 			st.GeneratedHash = hash
 			st.ManagedFiles = written
 			st.LastPlanHash = planHash
+			st.PlanFormat = plan.Format
+			st.ApprovedPlanHash = planHash
+			st.ApprovedPhase = "destroy"
 			if err := state.Save(st); err != nil {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_STATE_SAVE", "could not save local state")
 			}
 
-			if err := resolved.RunSteps(runner, "destroy", st.CompletedSteps, func(stepID string) error {
+			if err := templateengine.RunPlannedSteps(runner, "destroy", plan.DestroySteps, st.CompletedSteps, func() error {
+				current, err := verifyPlanSnapshot(plan)
+				if err != nil {
+					return err
+				}
+				return validateRecordedPlan(current, plan, st, "destroy", resume)
+			}, func(stepID string) error {
 				st.CompletedSteps[stepID] = true
 				st.LastPhase = "destroy"
 				return state.Save(st)
@@ -114,7 +133,7 @@ func newDestroyCmd() *cobra.Command {
 			}
 			println(cmd, "Destroy workflow finished.")
 			if options.JSON {
-				writeJSON(cmd.OutOrStdout(), map[string]interface{}{"ok": true, "phase": "destroy", "generated_files": written, "warnings": planWarnings})
+				writeJSON(cmd.OutOrStdout(), map[string]interface{}{"ok": true, "phase": "destroy", "generated_files": written, "warnings": plan.Warnings})
 			}
 			return nil
 		},

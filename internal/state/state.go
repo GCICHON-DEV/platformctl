@@ -21,6 +21,9 @@ const (
 )
 
 type State struct {
+	PlanFormat       string            `json:"plan_format,omitempty"`
+	ApprovedPlanHash string            `json:"approved_plan_hash,omitempty"`
+	ApprovedPhase    string            `json:"approved_phase,omitempty"`
 	TemplateSource   string            `json:"template_source"`
 	TemplateVersion  string            `json:"template_version,omitempty"`
 	TemplateChecksum string            `json:"template_checksum,omitempty"`

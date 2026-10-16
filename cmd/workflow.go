@@ -1,10 +1,6 @@
 package cmd
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"io"
 
 	"platformctl/internal/apperror"
@@ -20,31 +16,6 @@ func acquireWorkflowLock(phase string) (*state.Lock, error) {
 	return lock, nil
 }
 
-func warnIfPlanChanged(resolved *templateengine.Resolved, st *state.State) []string {
-	if st == nil || st.TemplateSource == "" {
-		return nil
-	}
-	var warnings []string
-	if st.TemplateChecksum != "" && resolved.Info.Checksum != "" && st.TemplateChecksum != resolved.Info.Checksum {
-		warnings = append(warnings, "template checksum differs from the last recorded plan; run platformctl plan before applying")
-	}
-	if st.GeneratedHash != "" {
-		if currentHash, err := resolved.GeneratedHash(); err == nil && currentHash != "" && currentHash != st.GeneratedHash {
-			warnings = append(warnings, "generated files differ from the last recorded plan; run platformctl plan before applying")
-		}
-	}
-	return warnings
-}
-
-func printPlanWarnings(w io.Writer, warnings []string) {
-	for _, warning := range warnings {
-		if options.JSON || options.Quiet {
-			continue
-		}
-		fmt.Fprintf(w, "[warn]    %s\n", warning)
-	}
-}
-
 func workflowStdout(stdout, stderr io.Writer) io.Writer {
 	if options.JSON {
 		return stderr
@@ -52,11 +23,47 @@ func workflowStdout(stdout, stderr io.Writer) io.Writer {
 	return stdout
 }
 
-func executionPlanHash(plan *templateengine.ExecutionPlan) (string, error) {
-	data, err := json.Marshal(plan)
-	if err != nil {
-		return "", err
+// validateRecordedPlan never updates files or state. A preview is not approval;
+// only a saved approval of this phase can authorize checkpoint reuse.
+func validateRecordedPlan(resolved *templateengine.Resolved, plan *templateengine.ExecutionPlan, st *state.State, phase string, resume bool) error {
+	code := "PLATFORMCTL_PLAN_CHANGED"
+	if resume {
+		code = "PLATFORMCTL_RESUME_INVALID"
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
+	invalid := func(reason string) error {
+		return apperror.WithRemediation(apperror.New(apperror.CategoryState, code, reason), "Run platformctl plan to review the new preview, then run platformctl "+phase+" without --resume.")
+	}
+	if resume && (st.PlanFormat != templateengine.PlanFormat || st.ApprovedPlanHash == "" || st.ApprovedPhase != phase || st.LastPhase != phase || st.ApprovedPlanHash != plan.Digest) {
+		return invalid("resume requires an unchanged preview approved for this workflow phase")
+	}
+	if st.LastPlanHash != "" && (st.PlanFormat != templateengine.PlanFormat || st.LastPlanHash != plan.Digest) {
+		return invalid("execution preview changed since it was recorded")
+	}
+	if st.LastPlanHash != "" {
+		current, err := resolved.GeneratedHash()
+		if err != nil || current != st.GeneratedHash || current != plan.GeneratedDigest {
+			return invalid("generated files changed or are missing since the recorded preview")
+		}
+	}
+	return nil
+}
+
+// Check immediately before mutation and each step, including target config edits
+// made by external tools while the CLI held its cooperative workspace lock.
+func verifyPlanSnapshot(plan *templateengine.ExecutionPlan) (*templateengine.Resolved, error) {
+	current, err := templateengine.Load(defaultConfigFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := current.Validate(); err != nil {
+		return nil, err
+	}
+	check, err := current.BuildPlan()
+	if err != nil {
+		return nil, err
+	}
+	if check.Digest != plan.Digest {
+		return nil, apperror.WithRemediation(apperror.New(apperror.CategoryState, "PLATFORMCTL_PLAN_CHANGED", "preview changed after approval; review it again"), "Run platformctl plan, then approve the new preview without --resume.")
+	}
+	return current, nil
 }

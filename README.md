@@ -22,7 +22,7 @@ platformctl up      # alias for apply
 platformctl down    # alias for destroy
 ```
 
-`platformctl init` creates `platform.yaml`, validates the selected template, installs supported pinned tools into `~/.platformctl/bin`, and runs a non-blocking preflight for required tools and credentials. `platformctl preflight` (alias: `doctor`) checks dependencies, credentials, local write access, Docker readiness when required, and Kubernetes context when required. `platformctl plan` renders files under `generated/`, prints the steps that would be run, and writes `.platformctl/state.json`. `platformctl apply` asks for confirmation unless `--yes` is provided. If a workflow fails after some steps completed, fix the problem and run:
+`platformctl init` creates `platform.yaml`, validates the selected template, installs supported pinned tools into `~/.platformctl/bin`, and runs a non-blocking preflight for required tools and credentials. `platformctl preflight` (alias: `doctor`) checks dependencies, credentials, local write access, Docker readiness when required, and Kubernetes context when required. `platformctl plan` renders files under `generated/`, prints a CLI workflow preview and its digest, and writes `.platformctl/state.json`. It does not install tools, execute `steps.plan`, run Terraform, or produce a saved Terraform plan. `platformctl apply` asks for confirmation unless `--yes` is provided. If a workflow fails after some steps completed, fix the problem and run:
 
 ```bash
 platformctl apply --resume
@@ -159,9 +159,19 @@ The repo also includes a local custom template under `examples/local-templates/c
 - On Linux and macOS, `.platformctl/lock` is a persistent file protected by a nonblocking kernel `flock`; file existence and its PID metadata do not indicate an active workflow. Never unlink or replace it while a CLI or workflow step may be running. Workflow steps inherit descriptor 3, retaining the lock after a CLI crash until their last inherited copy closes. Steps must preserve this descriptor, remain synchronous, and not explicitly unlock it; daemons or tools that close inherited descriptors need their own lifecycle coordination.
 - A crash releases ownership once all inherited copies close. PID reuse cannot take over or strand a v2 kernel lock. Older PID-only locks are reclaimed only when their recorded PID is absent; a live/reused PID or malformed legacy lock fails closed. Upgrade and rollback require an idle workspace; never mix old and new binaries concurrently. See [lock recovery and rollback](docs/troubleshooting.md#workspace-lock-recovery-and-rollback).
 - Generated files are reconciled from tracked `managed_files`; `platformctl` no longer deletes the whole `generated/` directory.
-- `apply`/`destroy` warn when the current template checksum or generated files differ from the last recorded plan.
-- `apply --resume` and `destroy --resume` are rejected when the recorded plan hash differs from the current plan.
-- `apply` and `destroy` require interactive confirmation unless `--yes` is passed.
+- The v2 preview digest covers rendered file bytes, source-file bytes, template identity/checksum, all input values, rendered steps/args, requirements and local target selectors. Raw input values and target configuration are not added to preview JSON/state; their digests are included. Existing rendered step arguments can still contain sensitive values.
+- Target selectors include the workspace, `AWS_*`, `KUBE*`, `TF_*`, Google credential/config paths, Docker selectors/config, kubeconfig bytes (default, environment and `--kubeconfig` paths), Terraform workspace selection files, and AWS config/credentials bytes. This binds local configuration, not live cloud account identity or remote infrastructure state. Custom script targets must be declared as template inputs; undeclared external script files/configuration are outside this contract.
+- `apply`/`destroy` reject a changed recorded preview or edited/missing managed output before installing tools or writing files. Run `platformctl plan` to review and record a new preview, then approve without `--resume`.
+- `apply --resume` and `destroy --resume` require a matching approval for that phase, not just a prior preview. Unchanged checkpoints are retained. Configuration is checked again after confirmation, after dependency setup and before each step; captured file bytes and step arguments are used for execution.
+- `apply` and `destroy` require interactive confirmation unless `--yes` is passed. Cancellation, input EOF and `--json` without `--yes` preserve generated files/state and do not initialize/install the managed toolchain. The workspace lock file may be created or its diagnostic metadata updated.
+- A workflow that changes its own bound target configuration (for example Kind updating the default kubeconfig) stops before its next step. Use an explicit isolated target and review changes before continuing; do not silently adopt a new context.
+- Preview approval authorizes the CLI workflow only. It is not approval of a saved Terraform plan: `steps.plan` are shown, not executed, and provider changes are not evaluated by this command. Saved Terraform plan/apply support remains tracked in PLAT-31.
+
+### Preview state upgrade and rollback
+
+Older state has no v2 approval evidence. Execution with a recorded legacy hash and all legacy resume attempts fail closed. Preserve a private copy of `.platformctl/state.json` and managed output before running `platformctl plan`; this records a v2 preview and clears old checkpoints/approval without running infrastructure steps. Then approve a fresh workflow. If the old run has an uncertain result, inspect its resources first; re-planning is not reconciliation.
+
+Rollback requires an idle workspace and the previous CLI binary. Preserve the current state and template pin. Do not resume a v2 approval with an older binary: it cannot enforce this contract. Restore an archived state only through a separately scoped recovery operation. Changing the binary does not undo infrastructure or data changes.
 
 ## Managed Toolchain
 
@@ -178,7 +188,7 @@ requirements:
       version: "v1.34.0"
 ```
 
-`platformctl init` and `platformctl plan` install missing supported tools into `~/.platformctl/bin`. `platformctl apply` and `platformctl destroy` use that directory before the global PATH. Supported managed tools are Terraform, Helm, kubectl, and Kind. Tools such as Docker and AWS CLI are checked but not installed automatically.
+`platformctl init` installs missing supported tools into `~/.platformctl/bin`. `platformctl apply` and `platformctl destroy` verify/install tools only after approval and use that directory before the global PATH. `platformctl plan` does not install tools. Supported managed tools are Terraform, Helm, kubectl, and Kind. Tools such as Docker and AWS CLI are checked but not installed automatically.
 Downloaded managed tools are verified with SHA256 checksums before installation.
 
 ## AWS Notes

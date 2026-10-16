@@ -17,7 +17,7 @@ func printExecutionPlan(w io.Writer, plan *templateengine.ExecutionPlan) {
 	if options.Quiet {
 		return
 	}
-	fmt.Fprintf(w, "Template: %s\n", plan.TemplateName)
+	fmt.Fprintf(w, "CLI workflow preview (not a Terraform saved plan).\nDigest: %s\nTarget digest: %s\nTemplate: %s\n", plan.Digest, plan.TargetDigest, plan.TemplateName)
 	fmt.Fprintf(w, "Source:   %s\n", plan.TemplateSource.Resolved)
 	if plan.TemplateSource.Checksum != "" {
 		fmt.Fprintf(w, "Checksum: %s\n", plan.TemplateSource.Checksum)
