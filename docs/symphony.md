@@ -85,7 +85,11 @@ Brak katalogu, rozbieżność SHA albo niejasny claim wymagają wyjaśnienia
 i raportu blokady przed kontynuacją.
 
 Wycofanie dopuszczenia obsługuje operator przez `jobs.py revoke`, a wynik
-sprawdza przez `jobs.py status`. Anulowanie nie oznacza usunięcia katalogu,
+sprawdza przez `jobs.py status`. Samo revoke nie zatrzymuje procesu.
+Operator osobno zatrzymuje własny profil kontrolerem i potwierdza zakończenie
+procesu oraz kontenera; `stage=paused` nie jest dowodem ich zatrzymania.
+Niepewny wynik stop wymaga uzgodnienia przed przejęciem lub resume.
+Anulowanie nie oznacza usunięcia katalogu,
 PR, stanu lub danych ani wykonania destroy. Zachowaj materiały do audytu
 i ewentualnego jawnego resume. Test restartu i anulowania wymaga dowodów
 z kontrolera; sam opis tego przebiegu ich nie dostarcza.
