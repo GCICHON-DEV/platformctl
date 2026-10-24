@@ -39,7 +39,7 @@ func newPlanCmd() *cobra.Command {
 			}
 			written, err := plan.GenerateWithPrevious(st.ManagedFiles)
 			if err != nil {
-				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_GENERATE_FAILED", "could not render preview files")
+				return apperror.WithContext(apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_GENERATE_FAILED", "could not render preview files"), err.Error())
 			}
 			planHash := plan.Digest
 			hash, err := resolved.GeneratedHash()

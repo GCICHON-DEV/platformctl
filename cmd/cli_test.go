@@ -38,6 +38,7 @@ func TestPlanCommandRendersLocalTemplateAndState(t *testing.T) {
 func TestApplyCommandRunsEchoTemplateAndUpAliasExists(t *testing.T) {
 	root := setupCLITemplate(t)
 	chdirForTest(t, root)
+	t.Setenv("HOME", t.TempDir())
 
 	cmd := newApplyCmd()
 	if len(cmd.Aliases) != 1 || cmd.Aliases[0] != "up" {

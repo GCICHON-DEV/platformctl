@@ -521,43 +521,10 @@ func (r *Resolved) GenerateWithPrevious(previousManaged []string) ([]string, err
 	return plan.GenerateWithPrevious(previousManaged)
 }
 
-// GenerateWithPrevious writes only the bytes captured in this preview.
+// GenerateWithPrevious publishes captured preview bytes as a recoverable file
+// transaction. The caller must hold the workspace workflow lock.
 func (p *ExecutionPlan) GenerateWithPrevious(previousManaged []string) ([]string, error) {
-	desired := map[string]bool{}
-	for _, path := range p.GeneratedFiles {
-		desired[path] = true
-	}
-	if err := reconcileManagedFiles(previousManaged, desired); err != nil {
-		return nil, err
-	}
-	for _, path := range p.GeneratedFiles {
-		if err := validateGeneratedPath(path); err != nil {
-			return nil, err
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return nil, err
-		}
-		if err := os.WriteFile(path, []byte(p.contents[path]), 0644); err != nil {
-			return nil, err
-		}
-	}
-	return append([]string{}, p.GeneratedFiles...), nil
-}
-
-func reconcileManagedFiles(previousManaged []string, desired map[string]bool) error {
-	for _, path := range previousManaged {
-		clean := filepath.Clean(path)
-		if !desired[clean] {
-			if err := validateGeneratedPath(clean); err != nil {
-				continue
-			}
-			if err := os.Remove(clean); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("remove previously managed file %s: %w", clean, err)
-			}
-			pruneGeneratedDir(filepath.Dir(clean))
-		}
-	}
-	return nil
+	return p.generateTransaction(previousManaged, transactionIO{os.WriteFile, os.Rename})
 }
 
 func pruneGeneratedDir(dir string) {
