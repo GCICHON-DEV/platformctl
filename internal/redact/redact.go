@@ -18,7 +18,7 @@ const MaxLine = 64 << 10
 var namePattern = regexp.MustCompile(`(?i)(password|passwd|secret|token|credential|api[_-]?key|access[_-]?key|private[_-]?key)`)
 var assignments = regexp.MustCompile(`(?i)((?:["']?(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)["']?)\s*[:=]\s*)("(?:\\.|[^"\\])*"|'[^']*'|[^\s,;&}]+)`)
 var flags = regexp.MustCompile(`(?i)(--(?:password|passwd|secret|token|api[-_]key|access[-_]key|private[-_]key|key)(?:=|\s+))("(?:\\.|[^"\\])*"|'[^']*'|[^\s]+)`)
-var userinfo = regexp.MustCompile(`(https?://)[^\s/@]+@`)
+var userinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)([^\s/]+)@`)
 
 type Redactor struct {
 	values   []string
@@ -181,6 +181,13 @@ func Command(args []string) *Redactor {
 	r := Environment()
 	values := append([]string{}, r.values...)
 	for i, arg := range args {
+		for _, match := range userinfo.FindAllStringSubmatch(arg, -1) {
+			if u, err := url.Parse(match[0] + "placeholder.invalid"); err == nil && u.User != nil {
+				if password, ok := u.User.Password(); ok {
+					values = append(values, password)
+				}
+			}
+		}
 		for _, match := range assignments.FindAllStringSubmatch(arg, -1) {
 			value := strings.Trim(match[2], "\"'")
 			values = append(values, value)

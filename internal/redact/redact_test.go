@@ -57,3 +57,17 @@ func TestRecognizedArgumentsBecomeOutputCanaries(t *testing.T) {
 		}
 	}
 }
+
+func TestGeneralURIUserinfo(t *testing.T) {
+	for _, scheme := range []string{"postgres", "postgresql", "redis", "mysql", "custom+secure"} {
+		const secret = "synthetic-uri-canary-731"
+		input := "printf '" + scheme + "://demo:" + secret + "@db.invalid/example\\n'"
+		r := Command([]string{"-c", input})
+		if strings.Contains(r.Text(input), secret) || strings.Contains(New().Text(input), secret) || strings.Contains(r.Text("password echoed alone: "+secret), secret) {
+			t.Fatal("URI userinfo leaked", scheme)
+		}
+	}
+	if got := New().Text("postgres://user:part@other@db.invalid/example"); strings.Contains(got, "part") || strings.Contains(got, "other") {
+		t.Fatal("raw at-sign leaked userinfo", got)
+	}
+}

@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,5 +85,49 @@ steps:
 				}
 			}
 		})
+	}
+}
+
+func TestActualBinaryRedactsDatabaseURIUserinfo(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "platformctl")
+	if out, err := exec.Command("go", "build", "-o", binary, "..").CombinedOutput(); err != nil {
+		t.Fatalf("build %v %s", err, out)
+	}
+	for _, scheme := range []string{"postgres", "postgresql", "redis", "mysql"} {
+		for _, machine := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/json=%v", scheme, machine), func(t *testing.T) {
+				root := t.TempDir()
+				secret := "synthetic-" + scheme + "-userinfo-canary-731"
+				script := "printf '" + scheme + "://demo:" + secret + "@db.invalid/example\\n'"
+				encoded, _ := json.Marshal(script)
+				manifest := "apiVersion: platformctl.io/v1beta1\nmetadata: {name: synthetic, description: Synthetic URI redaction}\nsteps:\n  apply:\n    - name: URI diagnostic\n      command: sh\n      args: [-c, " + string(encoded) + "]\n  destroy: [{name: noop, command: echo}]\n"
+				writeCLIFile(t, filepath.Join(root, "manifest.yaml"), manifest)
+				writeCLIFile(t, filepath.Join(root, "platform.yaml"), "template: {source: ./manifest.yaml}\n")
+				for _, phase := range []string{"plan", "apply"} {
+					args := []string{phase}
+					if machine {
+						args = append(args, "--json")
+					}
+					if phase == "apply" {
+						args = append(args, "--yes")
+					}
+					command := exec.Command(binary, args...)
+					command.Dir = root
+					command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + root}
+					var stdout, stderr bytes.Buffer
+					command.Stdout = &stdout
+					command.Stderr = &stderr
+					if err := command.Run(); err != nil {
+						t.Fatalf("%s %v %s %s", phase, err, stdout.String(), stderr.String())
+					}
+					if strings.Contains(stdout.String()+stderr.String(), secret) {
+						t.Fatalf("%s leaked URI userinfo", phase)
+					}
+					if machine && !json.Valid(stdout.Bytes()) {
+						t.Fatal("invalid JSON")
+					}
+				}
+			})
+		}
 	}
 }
