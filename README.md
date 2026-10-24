@@ -236,3 +236,5 @@ go build -o platformctl .
 The audit distinguishes static validation from real Kind/AWS acceptance. Cloud provisioning is not part of the planning/setup change.
 
 Kontrakt izolacji runnerów testowych i granice przygotowania PLAT-44: [runner sandbox](docs/runner-sandbox.md).
+
+Remote registry/HTTPS templates require [explicit source trust](docs/template-trust.md) before use; offline cache is opt-in.

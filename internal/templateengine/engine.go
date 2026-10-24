@@ -6,8 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,6 +133,7 @@ type Outputs struct {
 }
 
 type SourceInfo struct {
+	Offline  bool   `json:"offline,omitempty"`
 	Original string `json:"original,omitempty"`
 	Resolved string `json:"resolved"`
 	Version  string `json:"version,omitempty"`
@@ -186,7 +185,9 @@ type PlannedStep struct {
 	Retry          *Retry   `json:"retry,omitempty"`
 }
 
-func Load(platformPath string) (*Resolved, error) {
+func Load(platformPath string) (*Resolved, error) { return LoadWithMode(platformPath, false) }
+
+func LoadWithMode(platformPath string, offline bool) (*Resolved, error) {
 	platformData, err := os.ReadFile(platformPath)
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", platformPath, err)
@@ -205,7 +206,7 @@ func Load(platformPath string) (*Resolved, error) {
 		platform.Values = map[string]interface{}{}
 	}
 
-	manifestData, info, err := LoadManifest(platform.Template)
+	manifestData, info, err := loadManifestMode(platform.Template, offline)
 	if err != nil {
 		return nil, err
 	}
@@ -233,11 +234,21 @@ func Load(platformPath string) (*Resolved, error) {
 }
 
 func LoadManifest(template TemplateSource) ([]byte, SourceInfo, error) {
+	return loadManifestMode(template, false)
+}
+
+func loadManifestMode(template TemplateSource, offline bool) ([]byte, SourceInfo, error) {
 	resolved, err := ResolveTemplateSource(template)
 	if err != nil {
 		return nil, SourceInfo{}, err
 	}
-	data, err := fetchTemplate(resolved)
+	var data []byte
+	if resolved.Kind == "local" {
+		data, err = fetchTemplate(resolved)
+	} else {
+		data, err = readTrustedSource(resolved, offline)
+		resolved.Offline = offline
+	}
 	if err != nil {
 		return nil, SourceInfo{}, err
 	}
@@ -990,47 +1001,9 @@ func validateGeneratedPath(path string) error {
 
 func fetchTemplate(source SourceInfo) ([]byte, error) {
 	if source.Kind == "local" {
-		return os.ReadFile(source.Resolved)
+		return boundedLocal(source.Resolved, MaxTemplateBytes)
 	}
-	if !strings.HasPrefix(source.Resolved, "https://") {
-		return nil, fmt.Errorf("template.source must resolve to an https URL or local path")
-	}
-
-	cachePath, err := templateCachePath(source.Resolved)
-	if err != nil {
-		return nil, err
-	}
-
-	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Get(source.Resolved)
-	if err != nil {
-		if cached, cacheErr := os.ReadFile(cachePath); cacheErr == nil {
-			return cached, nil
-		}
-		return nil, fmt.Errorf("download template %s: %w", source.Resolved, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		if cached, cacheErr := os.ReadFile(cachePath); cacheErr == nil {
-			return cached, nil
-		}
-		return nil, fmt.Errorf("download template %s: unexpected status %s", source.Resolved, resp.Status)
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read template response %s: %w", source.Resolved, err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
-		return nil, fmt.Errorf("create template cache: %w", err)
-	}
-	if err := os.WriteFile(cachePath, data, 0644); err != nil {
-		return nil, fmt.Errorf("write template cache: %w", err)
-	}
-
-	return data, nil
+	return readTrustedSource(source, false)
 }
 
 func templateCachePath(source string) (string, error) {
