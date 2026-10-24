@@ -150,7 +150,7 @@ func validateStepDir(dir string) error {
 
 func MaskCommand(command string, args []string) string {
 	parts := append([]string{command}, args...)
-	return mask(strings.Join(parts, " "))
+	return redact.Command(args).Text(strings.Join(parts, " "))
 }
 
 func mask(text string) string { return redact.Environment().Text(text) }
