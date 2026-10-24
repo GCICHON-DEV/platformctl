@@ -62,6 +62,41 @@ func mustApproval(t *testing.T, root string, args ...string) string {
 	return output
 }
 
+func TestPlanGenerationFailurePreservesManagedUnmanagedAndState(t *testing.T) {
+	for _, failure := range []string{"render", "collision"} {
+		t.Run(failure, func(t *testing.T) {
+			root := setupCLITemplate(t)
+			mustApproval(t, root, "plan")
+			writeCLIFile(t, filepath.Join(root, "generated", "manual.txt"), "operator data")
+			path := filepath.Join(root, "template", "platform.template.yaml")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest := string(data)
+			wantError := "unmanaged file collision"
+			if failure == "collision" {
+				manifest = strings.Replace(manifest, "generated/out.txt", "generated/manual.txt", 1)
+			} else {
+				manifest = strings.Replace(manifest, "hello {{ .Values.project_name }}", "hello {{ .Values.missing }}", 1)
+				wantError = "PLATFORMCTL_PLAN_BUILD_FAILED"
+			}
+			if manifest == string(data) {
+				t.Fatal("fixture mutation did not match")
+			}
+			writeCLIFile(t, path, manifest)
+			before := approvalFiles(t, root)
+			out, err := runApproval(t, root, "", "plan")
+			if err == nil || !strings.Contains(out, wantError) {
+				t.Fatalf("expected %s failure: %v\n%s", failure, err, out)
+			}
+			if !reflect.DeepEqual(before, approvalFiles(t, root)) {
+				t.Fatal("failed generation changed managed files, unmanaged files or state")
+			}
+		})
+	}
+}
+
 func TestApprovalRejectionPreservesFilesAndDoesNotInstall(t *testing.T) {
 	for _, phase := range []string{"apply", "destroy"} {
 		for _, existing := range []bool{false, true} {

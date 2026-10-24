@@ -96,7 +96,7 @@ func newApplyCmd() *cobra.Command {
 			}
 			written, err := plan.GenerateWithPrevious(st.ManagedFiles)
 			if err != nil {
-				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_GENERATE_FAILED", "could not write approved preview")
+				return apperror.WithContext(apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_GENERATE_FAILED", "could not write approved preview"), err.Error())
 			}
 
 			if !resume || st.LastPhase != "apply" {
