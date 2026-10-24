@@ -53,6 +53,26 @@ python3 scripts/merge_pr.py --repo GCICHON-DEV/platformctl --pr NUMER --approved
 
 Pierwsza komenda tylko sprawdza. Skrypt akceptuje wyłącznie oba repozytoria platformctl, wymaga aktualnego main, bieżącego HEAD, sukcesu wymaganych kontroli i najnowszego zatwierdzenia dokładnego SHA. Komentarz review publikuje właściciel GCICHON-DEV na podstawie faktycznego raportu niezależnego reviewera; wpisuje różne tożsamości Implementer/Reviewer. Jest to atestacja właściciela, a nie niezależne uwierzytelnienie konta agenta przez GitHub. Formalne CHANGES_REQUESTED również blokuje. Nie używaj bezpośredniego merge omijającego skrypt.
 
+Bramka CLI sprawdza aktualne przebiegi `.github/workflows/process.yml` i
+`.github/workflows/ci.yml` przez API GitHub Actions. Potwierdza repozytorium,
+workflow ID i ścieżkę, zdarzenie `pull_request`, gałąź, PR i dokładny HEAD.
+Najwyższy `run_number` wyznacza bieżący przebieg; jego `run_attempt` wyznacza
+próbę. Każdy wymagany job tej konkretnej próby oraz cały przebieg muszą mieć
+`completed/success`. Starszy sukces, kontrola o tej samej nazwie z innego źródła,
+brak joba i duplikaty w bieżącej próbie nie zastępują dowodu. Po odczycie jobów
+bramka ponownie sprawdza aktualność przebiegów. Ponowienie wyłącznie wybranych
+jobów może nie zawierać pełnego zestawu; w takim przypadku uruchom cały workflow.
+Edycja opisu PR może utworzyć kolejny przebieg Process na tym samym SHA;
+historyczne sukcesy nie blokują przez samą powtórzoną nazwę. Kopia skryptu
+w repozytorium templates wymaga osobnego dostarczenia tej zmiany.
+
+Wspólną finalizację wykonuj przez zatwierdzony kontroler Symphony zgodnie z
+`dev-infrastucture/symphony/finalization.md`: prepare-source z aktualnego main,
+enqueue, run i odbiór wynikowego main CI. Kontroler uruchamia bramkę z przypiętego
+main; nigdy nie używaj skryptu z PR do zatwierdzenia jego własnego merge.
+Revert przywraca wcześniejszą odmowę przy duplikatach; nie cofa merge ani stanu
+platformy. Zmiana kontroli dostarczenia nie wymaga wdrożenia CLI/infrastruktury.
+
 Ochrona main wymaga strict checks, włącza egzekwowanie dla administratora i blokuje force push/deletion. Samo natywne ustawienie GitHuba nie weryfikuje tożsamości agentów w komentarzu — ten warunek sprawdza skrypt i rzeczywiste review.
 
 Dystrybucja binarek, pełna macierz wersji CLI–template i prawdziwe Kind E2E pozostają w backlogu. Bazowa walidacja kontraktu nie jest testem działającej platformy.
