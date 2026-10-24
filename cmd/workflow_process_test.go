@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"platformctl/internal/apperror"
 	"platformctl/internal/state"
 )
 
@@ -25,12 +24,7 @@ func TestWorkflowProcess(t *testing.T) {
 	for len(args) > 0 && args[0] != "--" {
 		args = args[1:]
 	}
-	rootCmd.SetArgs(args[1:])
-	if err := rootCmd.Execute(); err != nil {
-		apperror.Render(os.Stderr, err, options.Verbose, options.JSON)
-		os.Exit(1)
-	}
-	os.Exit(0)
+	os.Exit(runCLI(rootCmd, args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 func workflowProcess(t *testing.T, root string, args ...string) *exec.Cmd {

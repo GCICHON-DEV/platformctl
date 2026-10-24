@@ -23,8 +23,7 @@ func newStatusCmd() *cobra.Command {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_STATE_LOAD", "could not load local state")
 			}
 			if options.JSON {
-				writeJSON(cmd.OutOrStdout(), map[string]interface{}{"ok": true, "state": st})
-				return nil
+				return writeJSON(cmd.OutOrStdout(), map[string]interface{}{"ok": true, "state": st})
 			}
 			if st.TemplateSource == "" {
 				println(cmd, "No local platform state found.")

@@ -133,7 +133,7 @@ func newDestroyCmd() *cobra.Command {
 			}
 			println(cmd, "Destroy workflow finished.")
 			if options.JSON {
-				writeJSON(cmd.OutOrStdout(), map[string]interface{}{"ok": true, "phase": "destroy", "generated_files": written, "warnings": plan.Warnings})
+				return writeJSON(cmd.OutOrStdout(), map[string]interface{}{"ok": true, "phase": "destroy", "generated_files": written, "warnings": plan.Warnings})
 			}
 			return nil
 		},

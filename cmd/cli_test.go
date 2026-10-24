@@ -69,8 +69,15 @@ func TestStatusCommandSupportsJSON(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("status command returned error: %v", err)
 	}
-	if !strings.Contains(out.String(), `"ok": true`) {
-		t.Fatalf("status JSON missing ok=true: %s", out.String())
+	var response struct {
+		OK    bool                   `json:"ok"`
+		State map[string]interface{} `json:"state"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &response); err != nil {
+		t.Fatalf("invalid status JSON: %v: %s", err, out.String())
+	}
+	if !response.OK || response.State == nil {
+		t.Fatalf("status JSON lost ok/state: %s", out.String())
 	}
 }
 

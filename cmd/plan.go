@@ -63,7 +63,9 @@ func newPlanCmd() *cobra.Command {
 			if err := state.Save(st); err != nil {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_STATE_SAVE", "could not save local state")
 			}
-			printExecutionPlan(cmd.OutOrStdout(), plan)
+			if err := printExecutionPlan(cmd.OutOrStdout(), plan); err != nil {
+				return err
+			}
 			if !options.JSON {
 				printf(cmd, "Plan rendered. State written to %s.\n", state.Path())
 			}

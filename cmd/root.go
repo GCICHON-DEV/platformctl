@@ -3,8 +3,6 @@ package cmd
 import (
 	"os"
 
-	"platformctl/internal/apperror"
-
 	"github.com/spf13/cobra"
 )
 
@@ -42,17 +40,14 @@ preflight checks, resumable execution, and safe generated output matter.`,
 }
 
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		apperror.Render(os.Stderr, err, options.Verbose, options.JSON)
-		os.Exit(1)
-	}
+	os.Exit(runCLI(rootCmd, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&options.Verbose, "verbose", false, "show technical causes when an operation fails")
 	rootCmd.PersistentFlags().BoolVar(&options.Quiet, "quiet", false, "print only warnings, errors, and requested machine-readable output")
 	rootCmd.PersistentFlags().BoolVar(&options.NoColor, "no-color", false, "disable colored output")
-	rootCmd.PersistentFlags().BoolVar(&options.JSON, "json", false, "write machine-readable JSON output where supported")
+	rootCmd.PersistentFlags().BoolVar(&options.JSON, "json", false, "write one machine-readable JSON document to stdout")
 
 	rootCmd.AddCommand(newInitCmd())
 	rootCmd.AddCommand(newPreflightCmd())

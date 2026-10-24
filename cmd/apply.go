@@ -146,7 +146,7 @@ func newApplyCmd() *cobra.Command {
 			}
 			println(cmd, "Apply workflow finished.")
 			if options.JSON {
-				writeJSON(cmd.OutOrStdout(), map[string]interface{}{
+				return writeJSON(cmd.OutOrStdout(), map[string]interface{}{
 					"ok":               true,
 					"phase":            "apply",
 					"generated_files":  written,
