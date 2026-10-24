@@ -12,8 +12,8 @@ import (
 
 // Per-call operations let tests inject filesystem failures without global hooks.
 type transactionIO struct {
-	writeFile func(string, []byte, os.FileMode) error
-	rename    func(string, string) error
+	writeFile    func(string, []byte, os.FileMode) error
+	beforeRename func(string, string) error
 }
 
 type fileChange struct {
@@ -118,7 +118,7 @@ func (p *ExecutionPlan) generateTransaction(previous []string, fs transactionIO)
 				}
 			}
 			if change.backup != "" {
-				if err := safepath.Rename(change.backup, change.path, fs.rename); err != nil {
+				if err := safepath.Rename(change.backup, change.path, fs.beforeRename); err != nil {
 					failures = append(failures, fmt.Errorf("restore %s from %s: %w", change.path, change.backup, err))
 				}
 			}
@@ -143,13 +143,13 @@ func (p *ExecutionPlan) generateTransaction(previous []string, fs transactionIO)
 		}
 		if change.existed {
 			backup := filepath.Join(stage, fmt.Sprintf("old-%d", i))
-			if err := safepath.Rename(change.path, backup, fs.rename); err != nil {
+			if err := safepath.Rename(change.path, backup, fs.beforeRename); err != nil {
 				return rollback(fmt.Errorf("back up %s: %w", change.path, err))
 			}
 			change.backup = backup
 		}
 		if change.staged != "" {
-			if err := safepath.Rename(change.staged, change.path, fs.rename); err != nil {
+			if err := safepath.Rename(change.staged, change.path, fs.beforeRename); err != nil {
 				return rollback(fmt.Errorf("publish %s: %w", change.path, err))
 			}
 			change.installed = true

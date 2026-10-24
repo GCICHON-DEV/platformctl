@@ -82,7 +82,7 @@ func TestTransactionRollsBackEveryPublishFailure(t *testing.T) {
 				if calls == failAt {
 					return injected
 				}
-				return os.Rename(from, to)
+				return nil
 			}})
 			if !errors.Is(err, os.ErrPermission) || !strings.Contains(err.Error(), "rolled back") {
 				t.Fatalf("expected rolled back permission failure, got %v", err)
@@ -237,7 +237,7 @@ func TestTransactionRetainsBackupsWhenRollbackFails(t *testing.T) {
 		if calls > 1 {
 			return os.ErrPermission
 		} // Fail publication and restoration.
-		return os.Rename(from, to)
+		return nil
 	}})
 	if err == nil || !strings.Contains(err.Error(), "rollback incomplete") {
 		t.Fatalf("expected explicit recovery error, got %v", err)
@@ -275,7 +275,7 @@ func TestTransactionRejectsParentSwapAfterStaging(t *testing.T) {
 					swapped = true
 				}
 				return os.WriteFile(path, data, mode)
-			}, os.Rename})
+			}, nil})
 			if err == nil {
 				t.Fatal("expected unsafe parent rejection")
 			}

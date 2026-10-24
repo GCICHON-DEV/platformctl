@@ -526,7 +526,7 @@ func (r *Resolved) GenerateWithPrevious(previousManaged []string) ([]string, err
 // GenerateWithPrevious publishes captured preview bytes as a recoverable file
 // transaction. The caller must hold the workspace workflow lock.
 func (p *ExecutionPlan) GenerateWithPrevious(previousManaged []string) ([]string, error) {
-	return p.generateTransaction(previousManaged, transactionIO{safepath.WriteFile, os.Rename})
+	return p.generateTransaction(previousManaged, transactionIO{safepath.WriteFile, nil})
 }
 
 func pruneGeneratedDir(dir string) {

@@ -87,13 +87,10 @@ func (r *Runner) RunStepWithOptions(options StepOptions) error {
 	if r.PathEnv != "" {
 		cmd.Env = appendPathEnv(r.PathEnv)
 	}
-	// Go chdirs before remapping ExtraFiles and before close-on-exec. The
-	// child inherits this descriptor for chdir, then closes it at exec.
-	cmd.Dir = fmt.Sprintf("/proc/self/fd/%d", cwd.Fd())
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
 
-	if err := cmd.Run(); err != nil {
+	if err := runPinned(cmd, cwd); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return stepError(options, started, fmt.Errorf("timed out after %s", timeout))
 		}

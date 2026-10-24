@@ -247,11 +247,13 @@ jego plików oraz sieci. CLI nie jest sandboxem: komenda może sama zmienić kat
 Operacje plikowe CLI odrzucają symlinki w ścieżkach `generated/`, w lokalnym
 `files[].source` względem katalogu szablonu oraz w katalogu roboczym kroku (`dir`).
 Katalog szablonu i bieżący workspace stanowią wybrane przez operatora granice
-zaufania. Na Linuksie otwarte deskryptory katalogów chronią operacje również
+zaufania. Na Linuksie i macOS otwarte deskryptory katalogów chronią operacje również
 przy podmianie komponentu ścieżki na symlink między walidacją a użyciem. Odczyt
 source wymaga zwykłego pliku, zapis jest publikowany przez rename, a usuwanie
 nie podąża za końcowym symlinkiem. Katalog cwd jest przypięty przed startem
-procesu. Wymagany jest dostęp do `/proc`.
+procesu. Linux używa `/proc/self/fd`; macOS używa natywnych operacji `*at`
+i przypiętego do deskryptora katalogu wątku podczas startu procesu, bez zmiany
+process-wide cwd. Uprawnienia stagingu są zmieniane bez podążania za symlinkiem.
 Na pozostałych systemach te operacje kończą się jawnym błędem zamiast słabszej
 walidacji. Ochrona nie izoluje od procesu z tymi samymi uprawnieniami, który
 przenosi już otwarte katalogi poza workspace, ani od zmian zawartości pliku

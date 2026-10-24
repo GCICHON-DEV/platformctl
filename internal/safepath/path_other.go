@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package safepath
 
@@ -8,7 +8,7 @@ import (
 )
 
 func unsupported() error {
-	return fmt.Errorf("secure workspace operations require Linux directory descriptors and /proc")
+	return fmt.Errorf("secure workspace operations require Linux or macOS directory descriptors")
 }
 func OpenDir(root, path string, create bool) (*os.File, error)        { return nil, unsupported() }
 func Rename(from, to string, rename func(string, string) error) error { return unsupported() }

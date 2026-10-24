@@ -53,7 +53,7 @@ func parent(path string) (*os.File, string, error) {
 }
 
 // Rename pins both parents; rename replaces a final symlink rather than following it.
-func Rename(from, to string, rename func(string, string) error) error {
+func Rename(from, to string, beforeRename func(string, string) error) error {
 	a, source, err := parent(from)
 	if err != nil {
 		return err
@@ -64,7 +64,12 @@ func Rename(from, to string, rename func(string, string) error) error {
 		return err
 	}
 	defer b.Close()
-	return rename(source, target)
+	if beforeRename != nil {
+		if err := beforeRename(from, to); err != nil {
+			return err
+		}
+	}
+	return os.Rename(source, target)
 }
 
 func Remove(path string) error {
