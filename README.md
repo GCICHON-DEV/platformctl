@@ -7,6 +7,7 @@ It is not a CI/CD system and it is not a replacement for Terraform, Helm, kubect
 ## Core Workflow
 
 ```bash
+platformctl template lock --source platformctl/local-kind-standard --version v1.1.0
 platformctl init --template platformctl/local-kind-standard --project demo
 platformctl preflight
 platformctl plan
