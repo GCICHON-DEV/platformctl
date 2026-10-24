@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 from process_policy import validate
+from current_ci import verify_current_ci
 
 REPOS = {
     "GCICHON-DEV/platformctl": {"process-policy", "quality", "template-contract"},
@@ -40,20 +41,6 @@ def review_record(comments, sha, owner):
         raise ValueError("latest review record does not approve this SHA")
 
 
-def checks_pass(rollup, required):
-    found = {}
-    for check in rollup or []:
-        name = check.get("name") or check.get("context")
-        # Duplicate required names are ambiguous; do not choose a convenient success.
-        if name in required and name in found:
-            raise ValueError("duplicate required check: " + name)
-        found[name] = check
-    for name in required:
-        check = found.get(name, {})
-        if check.get("conclusion") != "SUCCESS" and check.get("state") != "SUCCESS":
-            raise ValueError("required check is not SUCCESS: " + name)
-
-
 def formal_reviews_pass(reviews):
     latest = {}
     for review in reviews:
@@ -66,6 +53,14 @@ def formal_reviews_pass(reviews):
 def paged(path):
     pages = json.loads(run("gh", "api", "--paginate", "--slurp", path))
     return [item for page in pages for item in page]
+
+
+def collection(path, field):
+    pages = json.loads(run("gh", "api", "--paginate", "--slurp", path))
+    items = [item for page in pages for item in page[field]]
+    if not pages or any(page.get("total_count") != len(items) for page in pages):
+        raise ValueError("incomplete or changing CI collection: " + field)
+    return items
 
 
 def check(repo, number, sha):
@@ -83,8 +78,7 @@ def check(repo, number, sha):
     comparison = api(f"repos/{repo}/compare/main...{sha}")
     if comparison["behind_by"] != 0 or comparison["status"] not in {"ahead", "identical"}:
         raise ValueError("main advanced; synchronize, rerun CI, and review the new SHA")
-    rollup = json.loads(run("gh", "pr", "view", str(number), "--repo", repo, "--json", "statusCheckRollup"))["statusCheckRollup"]
-    checks_pass(rollup, REPOS[repo])
+    verify_current_ci(repo, number, sha, pr["head"]["ref"], REPOS[repo], api, collection)
     review_record(paged(f"repos/{repo}/issues/{number}/comments"), sha, repo.split("/")[0])
     formal_reviews_pass(paged(f"repos/{repo}/pulls/{number}/reviews"))
     if pr.get("mergeable") is not True:
