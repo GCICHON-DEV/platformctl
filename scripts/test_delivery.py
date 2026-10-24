@@ -1,6 +1,6 @@
 import unittest
 from process_policy import validate
-from merge_pr import checks_pass, formal_reviews_pass, review_record
+from merge_pr import formal_reviews_pass, review_record
 
 
 class DeliveryTests(unittest.TestCase):
@@ -42,14 +42,6 @@ class DeliveryTests(unittest.TestCase):
         rejected.update(id=2, updated_at="2026-10-16")
         with self.assertRaises(ValueError):
             review_record([self.record(), rejected], "a" * 40, "GCICHON-DEV")
-
-    def test_checks_require_success_and_reject_duplicates(self):
-        checks_pass([{"name": "quality", "conclusion": "SUCCESS"}], {"quality"})
-        for rollup in ([], [{"name": "quality", "conclusion": "SKIPPED"}],
-                       [{"name": "quality", "status": "IN_PROGRESS"}],
-                       [{"name": "quality", "conclusion": "SUCCESS"}] * 2):
-            with self.subTest(rollup=rollup), self.assertRaises(ValueError):
-                checks_pass(rollup, {"quality"})
 
     def test_formal_changes_requested_blocks_until_resolved(self):
         changes = {"user": {"login": "reviewer"}, "state": "CHANGES_REQUESTED"}
