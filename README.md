@@ -7,6 +7,7 @@ It is not a CI/CD system and it is not a replacement for Terraform, Helm, kubect
 ## Core Workflow
 
 ```bash
+platformctl template lock --source platformctl/local-kind-standard --version v1.1.0
 platformctl init --template platformctl/local-kind-standard --project demo
 platformctl preflight
 platformctl plan
@@ -238,3 +239,4 @@ The audit distinguishes static validation from real Kind/AWS acceptance. Cloud p
 Kontrakt izolacji runnerów testowych i granice przygotowania PLAT-44: [runner sandbox](docs/runner-sandbox.md).
 
 See [secret handling and diagnostic redaction](docs/secret-redaction.md) before passing credentials to workflows.
+Remote registry/HTTPS templates require [explicit source trust](docs/template-trust.md) before use; offline cache is opt-in.

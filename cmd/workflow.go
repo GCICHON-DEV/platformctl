@@ -51,7 +51,7 @@ func validateRecordedPlan(resolved *templateengine.Resolved, plan *templateengin
 // Check immediately before mutation and each step, including target config edits
 // made by external tools while the CLI held its cooperative workspace lock.
 func verifyPlanSnapshot(plan *templateengine.ExecutionPlan) (*templateengine.Resolved, error) {
-	current, err := templateengine.Load(defaultConfigFile)
+	current, err := templateengine.LoadWithMode(defaultConfigFile, options.Offline)
 	if err != nil {
 		return nil, err
 	}

@@ -2,10 +2,18 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"platformctl/internal/templateengine"
 	"strings"
 	"syscall"
 	"testing"
@@ -19,6 +27,17 @@ import (
 func TestWorkflowProcess(t *testing.T) {
 	if os.Getenv("PLATFORMCTL_TEST_PROCESS") != "1" {
 		return
+	}
+	if ca := os.Getenv("PLATFORMCTL_TEST_CA"); ca != "" {
+		data, err := os.ReadFile(ca)
+		if err != nil {
+			panic(err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(data) {
+			panic("bad synthetic CA")
+		}
+		http.DefaultTransport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
 	}
 	args := os.Args
 	for len(args) > 0 && args[0] != "--" {
@@ -161,26 +180,47 @@ func TestInitAndPlanLockBeforeReadingTemplate(t *testing.T) {
 	for _, phase := range []string{"init", "plan"} {
 		t.Run(phase, func(t *testing.T) {
 			root := setupCLITemplate(t)
-			manifest := filepath.Join(root, "template", "platform.template.yaml")
-			if err := os.Remove(manifest); err != nil {
+			data, err := os.ReadFile(filepath.Join(root, "template", "platform.template.yaml"))
+			if err != nil {
 				t.Fatal(err)
 			}
-			if err := syscall.Mkfifo(manifest, 0600); err != nil {
+			entered := make(chan struct{}, 1)
+			release := make(chan struct{})
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case entered <- struct{}{}:
+				default:
+				}
+				<-release
+				_, _ = w.Write(data)
+			}))
+			t.Cleanup(func() { close(release); server.Close() })
+			ca := filepath.Join(root, "synthetic-ca.pem")
+			if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600); err != nil {
 				t.Fatal(err)
 			}
+			writeCLIFile(t, filepath.Join(root, "platform.yaml"), "template:\n  source: "+server.URL+"/manifest.yaml\nvalues:\n  project_name: demo\n")
+			record := templateengine.SourceLock{Format: 1, Source: server.URL + "/manifest.yaml", SHA256: fmt.Sprintf("%x", sha256.Sum256(data)), Manifest: data}
+			encoded, err := json.Marshal(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeCLIFile(t, filepath.Join(root, templateengine.SourceLockPath), string(encoded))
 			args := []string{phase}
 			if phase == "init" {
-				args = append(args, "--force", "--template", "./template")
+				args = append(args, "--force", "--template", server.URL+"/manifest.yaml")
 			}
 			holder := workflowProcess(t, root, args...)
+			holder.Env = append(holder.Env, "PLATFORMCTL_TEST_CA="+ca)
 			if err := holder.Start(); err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = holder.Process.Kill(); _ = holder.Wait() })
-			waitFor(t, "lock before blocked template read", func() bool {
-				data, _ := os.ReadFile(filepath.Join(root, state.LockPath()))
-				return strings.Contains(string(data), "operation="+phase)
-			})
+			select {
+			case <-entered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("holder never entered synthetic HTTPS read")
+			}
 			for _, other := range []string{"apply", "destroy", "plan", "init"} {
 				data, err := workflowProcess(t, root, other).CombinedOutput()
 				if err == nil || !strings.Contains(string(data), "another platformctl workflow") {

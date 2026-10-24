@@ -44,7 +44,7 @@ func newPreflightCmd() *cobra.Command {
   platformctl preflight --strict
   platformctl preflight --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resolved, err := templateengine.Load(defaultConfigFile)
+			resolved, err := templateengine.LoadWithMode(defaultConfigFile, options.Offline)
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryConfig, "PLATFORMCTL_CONFIG_LOAD", "could not load platform.yaml")
 			}

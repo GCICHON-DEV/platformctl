@@ -9,6 +9,7 @@ import (
 const defaultConfigFile = "platform.yaml"
 
 type cliOptions struct {
+	Offline bool
 	Verbose bool
 	Quiet   bool
 	NoColor bool
@@ -49,6 +50,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&options.NoColor, "no-color", false, "disable colored output")
 	rootCmd.PersistentFlags().BoolVar(&options.JSON, "json", false, "write one machine-readable JSON document to stdout")
 
+	rootCmd.AddCommand(newTemplateCmd())
+	rootCmd.PersistentFlags().BoolVar(&options.Offline, "offline", false, "use only the explicitly trusted remote manifest cache")
 	rootCmd.AddCommand(newInitCmd())
 	rootCmd.AddCommand(newPreflightCmd())
 	rootCmd.AddCommand(newPlanCmd())

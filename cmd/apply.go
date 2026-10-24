@@ -32,7 +32,7 @@ func newApplyCmd() *cobra.Command {
 				return err
 			}
 			defer lock.Release()
-			resolved, err := templateengine.Load(defaultConfigFile)
+			resolved, err := templateengine.LoadWithMode(defaultConfigFile, options.Offline)
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryConfig, "PLATFORMCTL_CONFIG_LOAD", "could not load platform.yaml")
 			}
