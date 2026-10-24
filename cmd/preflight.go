@@ -1,10 +1,15 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"platformctl/internal/checkexec"
+	"platformctl/internal/state"
+	"strings"
+	"time"
 
 	"platformctl/internal/apperror"
 	"platformctl/internal/deps"
@@ -19,6 +24,7 @@ type preflightResult struct {
 	Template    string        `json:"template"`
 	Source      string        `json:"source"`
 	Checksum    string        `json:"checksum,omitempty"`
+	Phase       string        `json:"phase"`
 	Tools       []deps.Status `json:"tools,omitempty"`
 	Credentials []checkStatus `json:"credentials,omitempty"`
 	Warnings    []string      `json:"warnings,omitempty"`
@@ -33,6 +39,8 @@ type checkStatus struct {
 
 func newPreflightCmd() *cobra.Command {
 	var strict bool
+	var phase string
+	var timeout time.Duration
 
 	cmd := &cobra.Command{
 		Use:           "preflight",
@@ -51,7 +59,13 @@ func newPreflightCmd() *cobra.Command {
 			if err := resolved.Validate(); err != nil {
 				return apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_TEMPLATE_INVALID", "template validation failed")
 			}
-			result, err := runPreflight(cmd, resolved, strict)
+			if phase != "bootstrap" && phase != "apply" && phase != "destroy" {
+				return apperror.New(apperror.CategoryConfig, "PLATFORMCTL_PREFLIGHT_PHASE", "phase must be bootstrap, apply, or destroy")
+			}
+			if timeout < 100*time.Millisecond || timeout > 30*time.Second {
+				return apperror.New(apperror.CategoryConfig, "PLATFORMCTL_PREFLIGHT_TIMEOUT", "check timeout must be between 100ms and 30s")
+			}
+			result, err := runPreflightPhase(cmd, resolved, strict, phase, timeout)
 			if err != nil {
 				return err
 			}
@@ -65,21 +79,31 @@ func newPreflightCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&strict, "strict", false, "fail if any required dependency, version, or credential check fails")
+	cmd.Flags().StringVar(&phase, "phase", "bootstrap", "readiness phase: bootstrap, apply, or destroy")
+	cmd.Flags().DurationVar(&timeout, "check-timeout", 5*time.Second, "deadline for each diagnostic subprocess (100ms..30s)")
 	return cmd
 }
 
 func runPreflight(cmd *cobra.Command, resolved *templateengine.Resolved, strict bool) (*preflightResult, error) {
-	result := &preflightResult{OK: true, Template: resolved.Manifest.Name, Source: resolved.Info.Resolved, Checksum: resolved.Info.Checksum}
+	return runPreflightPhase(cmd, resolved, strict, "bootstrap", 5*time.Second)
+}
+
+func runPreflightPhase(cmd *cobra.Command, resolved *templateengine.Resolved, strict bool, phase string, timeout time.Duration) (*preflightResult, error) {
+	ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
+	defer cancel()
+	result := &preflightResult{Phase: phase, OK: true, Template: resolved.Manifest.Name, Source: resolved.Info.Resolved, Checksum: resolved.Info.Checksum}
 	printf(cmd, "Template: %s\n", resolved.Manifest.Name)
 	printf(cmd, "Source:   %s\n", resolved.Info.Resolved)
 	if resolved.Info.Checksum != "" {
 		printf(cmd, "Checksum: %s\n", resolved.Info.Checksum)
 	}
 
-	manager, statuses, err := ensureToolchain(cmd, resolved, strict)
+	manager, err := toolchain.New(nil, nil)
 	if err != nil {
 		return result, apperror.Wrap(err, apperror.CategoryDependency, "PLATFORMCTL_TOOLCHAIN_FAILED", "toolchain preflight failed")
 	}
+	statuses := manager.Check(ctx, timeout, resolved.RequirementTools())
+	printDependencyStatus(cmd, statuses)
 	result.Tools = statuses
 	if missing := deps.Missing(statuses); len(missing) > 0 {
 		result.OK = false
@@ -116,9 +140,11 @@ func runPreflight(cmd *cobra.Command, resolved *templateengine.Resolved, strict 
 			}
 			args = append(args, rendered)
 		}
-		check := exec.Command(command, args...)
-		check.Env = appendPath("PATH", manager.PathEnv())
-		if err := check.Run(); err != nil {
+		commandPath, checkErr := lookPathInEnv(manager.PathEnv(), command)
+		if checkErr == nil {
+			_, checkErr = checkexec.Run(ctx, timeout, commandPath, args, appendPath("PATH", manager.PathEnv()))
+		}
+		if err := checkErr; err != nil {
 			result.OK = false
 			message := fmt.Sprintf("credential check %s failed: %v", credential.Name, err)
 			result.Credentials = append(result.Credentials, checkStatus{Name: credential.Name, OK: false, Message: message})
@@ -135,7 +161,25 @@ func runPreflight(cmd *cobra.Command, resolved *templateengine.Resolved, strict 
 	if _, err := resolved.RenderedFilePaths(); err != nil {
 		return result, apperror.Wrap(err, apperror.CategoryTemplate, "PLATFORMCTL_RENDER_PATHS", "template generated paths are invalid")
 	}
-	for _, check := range localReadinessChecks(manager.PathEnv(), resolved) {
+	checks := localReadinessChecks(ctx, timeout, manager.PathEnv(), resolved, phase)
+	checks = append(checks, targetChecks(ctx, timeout, manager.PathEnv(), resolved, phase != "bootstrap")...)
+	identityWarnings := []string{}
+	if resolved.Platform.Target == nil {
+		identityWarnings = append(identityWarnings, "target identity is not verified: legacy config has no expected target")
+	} else {
+		if hasTool(resolved, "aws") && resolved.Platform.Target.AWS == nil {
+			identityWarnings = append(identityWarnings, "AWS account/region identity is not verified: no target.aws")
+		}
+		if hasTool(resolved, "kubectl") && resolved.Platform.Target.Kubernetes == nil {
+			identityWarnings = append(identityWarnings, "Kubernetes identity is not verified: no target.kubernetes")
+		}
+	}
+	for _, message := range identityWarnings {
+		result.Warnings = append(result.Warnings, message)
+		printf(cmd, "[warn]    %s\n", message)
+	}
+
+	for _, check := range checks {
 		if !check.OK {
 			result.OK = false
 			result.Warnings = append(result.Warnings, check.Message)
@@ -171,51 +215,73 @@ func printDependencyStatus(cmd *cobra.Command, statuses []deps.Status) {
 	}
 }
 
-func localReadinessChecks(pathEnv string, resolved *templateengine.Resolved) []checkStatus {
-	var checks []checkStatus
-	checks = append(checks, writablePathCheck("managed toolchain directory"))
-	if hasTool(resolved, "docker") {
-		checks = append(checks, commandCheck("docker daemon", pathEnv, "docker", "info"))
+func localReadinessChecks(ctx context.Context, timeout time.Duration, pathEnv string, resolved *templateengine.Resolved, phase string) []checkStatus {
+	checks := []checkStatus{workspaceCheck("workspace", "."), workspaceCheck("local state directory", state.DirName)}
+	if info, err := os.Lstat(filepath.Join(state.DirName, state.FileName)); err == nil && (!info.Mode().IsRegular() || info.Mode().Perm()&0222 == 0) {
+		checks = append(checks, checkStatus{Name: "local state file", Message: "state must be a writable regular file"})
+	} else if err != nil && !os.IsNotExist(err) {
+		checks = append(checks, checkStatus{Name: "local state file", Message: "state cannot be inspected"})
 	}
-	if hasTool(resolved, "kubectl") {
-		checks = append(checks, commandCheck("kubectl current context", pathEnv, "kubectl", "config", "current-context"))
+	if _, err := state.Load(); err != nil {
+		checks = append(checks, checkStatus{Name: "local state", Message: "state is unreadable or malformed"})
+	}
+	if hasTool(resolved, "docker") {
+		checks = append(checks, commandCheck(ctx, timeout, "docker daemon", pathEnv, "docker", "info"))
+	}
+	if phase != "bootstrap" && phaseNeedsCluster(resolved, phase) {
+		checks = append(checks, commandCheck(ctx, timeout, "kubectl current context", pathEnv, "kubectl", "config", "current-context"))
 	}
 	return checks
 }
 
-func writablePathCheck(name string) checkStatus {
-	dir, err := toolchain.BinDir()
+// Probe the closest existing parent without creating state/config directories.
+func workspaceCheck(name, directory string) checkStatus {
+	root, err := os.Getwd()
 	if err != nil {
-		return checkStatus{Name: name, OK: false, Message: err.Error()}
+		return checkStatus{Name: name, Message: err.Error()}
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return checkStatus{Name: name, OK: false, Message: err.Error()}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return checkStatus{Name: name, Message: err.Error()}
+	}
+	dir := filepath.Join(root, directory)
+	for {
+		info, statErr := os.Lstat(dir)
+		if os.IsNotExist(statErr) {
+			dir = filepath.Dir(dir)
+			continue
+		}
+		if statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0222 == 0 {
+			return checkStatus{Name: name, Message: "directory must be writable and must not be a symlink"}
+		}
+		break
 	}
 	probe, err := os.CreateTemp(dir, ".platformctl-write-test-*")
 	if err != nil {
-		return checkStatus{Name: name, OK: false, Message: err.Error()}
+		return checkStatus{Name: name, Message: err.Error()}
 	}
-	probeName := probe.Name()
-	_ = probe.Close()
-	_ = os.Remove(probeName)
-	return checkStatus{Name: name, OK: true, Message: filepath.Clean(dir) + " is writable"}
+	path := probe.Name()
+	err = probe.Close()
+	removeErr := os.Remove(path)
+	if err != nil || removeErr != nil {
+		return checkStatus{Name: name, Message: "could not close/remove workspace probe"}
+	}
+	return checkStatus{Name: name, OK: true}
 }
 
-func commandCheck(name, pathEnv, command string, args ...string) checkStatus {
+func commandCheck(ctx context.Context, timeout time.Duration, name, pathEnv, command string, args ...string) checkStatus {
 	commandPath, err := lookPathInEnv(pathEnv, command)
-	if err != nil {
-		return checkStatus{Name: name, OK: false, Message: err.Error()}
+	if err == nil {
+		_, err = checkexec.Run(ctx, timeout, commandPath, args, appendPath("PATH", pathEnv))
 	}
-	check := exec.Command(commandPath, args...)
-	check.Env = appendPath("PATH", pathEnv)
-	if err := check.Run(); err != nil {
-		return checkStatus{Name: name, OK: false, Message: err.Error()}
+	if err != nil {
+		return checkStatus{Name: name, Message: err.Error()}
 	}
 	return checkStatus{Name: name, OK: true}
 }
 
 func lookPathInEnv(pathEnv, command string) (string, error) {
-	if pathEnv == "" {
+	if pathEnv == "" || filepath.IsAbs(command) || strings.ContainsRune(command, os.PathSeparator) {
 		return exec.LookPath(command)
 	}
 	for _, dir := range filepath.SplitList(pathEnv) {

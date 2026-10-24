@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"strings"
+	"time"
 
 	"platformctl/internal/apperror"
 	"platformctl/internal/executor"
@@ -79,11 +80,27 @@ func newApplyCmd() *cobra.Command {
 			if err := validateRecordedPlan(current, plan, st, "apply", resume); err != nil {
 				return err
 			}
+			for _, step := range plan.ApplySteps {
+				if err := validateStepTarget(resolved, step); err != nil {
+					return err
+				}
+			}
 			manager, _, err := ensureToolchain(cmd, resolved, true)
 			if err != nil {
 				return err
 			}
-			runner := executor.NewRunner(workflowStdout(cmd.OutOrStdout(), cmd.ErrOrStderr()), cmd.ErrOrStderr()).WithPathEnv(manager.PathEnv()).WithWorkflowLock(lock.File())
+			phase := "apply"
+			if resolved.Platform.Target == nil || resolved.Platform.Target.Bootstrap {
+				phase = "bootstrap"
+			}
+			preflight, err := runPreflightPhase(cmd, resolved, true, phase, 5*time.Second)
+			if err != nil {
+				return err
+			}
+			if !preflight.OK {
+				return apperror.New(apperror.CategoryDependency, "PLATFORMCTL_PREFLIGHT_FAILED", "required preflight checks failed")
+			}
+			runner := executor.NewRunner(workflowStdout(cmd.OutOrStdout(), cmd.ErrOrStderr()), cmd.ErrOrStderr()).WithPathEnv(manager.PathEnv()).WithWorkflowLock(lock.File()).WithEnvironment(targetEnvironment(resolved.Platform.Target))
 			if err := runner.RequireTools(resolved.RequiredTools()...); err != nil {
 				return apperror.Wrap(err, apperror.CategoryDependency, "PLATFORMCTL_MISSING_TOOLS", "required tools are missing")
 			}
@@ -122,12 +139,17 @@ func newApplyCmd() *cobra.Command {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_STATE_SAVE", "could not save local state")
 			}
 
-			if err := templateengine.RunPlannedSteps(runner, "apply", plan.ApplySteps, st.CompletedSteps, func() error {
+			if err := templateengine.RunPlannedStepsGuarded(runner, "apply", plan.ApplySteps, st.CompletedSteps, func() error {
 				current, err := verifyPlanSnapshot(plan)
 				if err != nil {
 					return err
 				}
 				return validateRecordedPlan(current, plan, st, "apply", resume)
+			}, func(step templateengine.PlannedStep) error {
+				if err := validateStepTarget(resolved, step); err != nil {
+					return err
+				}
+				return requireTarget(cmd.Context(), manager.PathEnv(), resolved, phase != "bootstrap" || clusterStep(step))
 			}, func(stepID string) error {
 				st.CompletedSteps[stepID] = true
 				st.LastPhase = "apply"

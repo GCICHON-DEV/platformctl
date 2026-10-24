@@ -31,6 +31,26 @@ const (
 type PlatformFile struct {
 	Template TemplateSource         `yaml:"template"`
 	Values   map[string]interface{} `yaml:"values"`
+	Target   *Target                `yaml:"target,omitempty" json:"target,omitempty"`
+}
+
+// Target is an optional, operator-owned identity assertion, never credentials.
+// It is part of the existing preview digest through PlatformFile.
+type Target struct {
+	Bootstrap   bool              `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty"`
+	AWS         *AWSTarget        `yaml:"aws,omitempty" json:"aws,omitempty"`
+	Kubernetes  *KubernetesTarget `yaml:"kubernetes,omitempty" json:"kubernetes,omitempty"`
+	ClusterName string            `yaml:"cluster_name,omitempty" json:"cluster_name,omitempty"`
+}
+type AWSTarget struct {
+	Account string `yaml:"account" json:"account"`
+	Region  string `yaml:"region" json:"region"`
+	Profile string `yaml:"profile" json:"profile"`
+}
+type KubernetesTarget struct {
+	Context string `yaml:"context" json:"context"`
+	Cluster string `yaml:"cluster" json:"cluster"`
+	Server  string `yaml:"server" json:"server"`
 }
 
 type TemplateSource struct {
@@ -110,15 +130,16 @@ type Workflow struct {
 }
 
 type Step struct {
-	ID             string   `yaml:"id"`
-	Name           string   `yaml:"name"`
-	Command        string   `yaml:"command"`
-	Args           []string `yaml:"args"`
-	Dir            string   `yaml:"dir"`
-	TimeoutSeconds int      `yaml:"timeout_seconds"`
-	Suggestion     string   `yaml:"suggestion"`
-	Preflight      bool     `yaml:"preflight"`
-	Retry          Retry    `yaml:"retry"`
+	ID              string   `yaml:"id"`
+	Name            string   `yaml:"name"`
+	Command         string   `yaml:"command"`
+	Args            []string `yaml:"args"`
+	Dir             string   `yaml:"dir"`
+	TimeoutSeconds  int      `yaml:"timeout_seconds"`
+	Suggestion      string   `yaml:"suggestion"`
+	Preflight       bool     `yaml:"preflight"`
+	RequiresCluster bool     `yaml:"requires_cluster,omitempty"`
+	Retry           Retry    `yaml:"retry"`
 }
 
 type Retry struct {
@@ -173,16 +194,17 @@ type ExecutionPlan struct {
 }
 
 type PlannedStep struct {
-	ID             string   `json:"id"`
-	Index          int      `json:"index"`
-	Name           string   `json:"name"`
-	Command        string   `json:"command"`
-	Args           []string `json:"args,omitempty"`
-	Dir            string   `json:"dir"`
-	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
-	Suggestion     string   `json:"suggestion,omitempty"`
-	Preflight      bool     `json:"preflight,omitempty"`
-	Retry          *Retry   `json:"retry,omitempty"`
+	ID              string   `json:"id"`
+	Index           int      `json:"index"`
+	Name            string   `json:"name"`
+	Command         string   `json:"command"`
+	Args            []string `json:"args,omitempty"`
+	Dir             string   `json:"dir"`
+	TimeoutSeconds  int      `json:"timeout_seconds,omitempty"`
+	Suggestion      string   `json:"suggestion,omitempty"`
+	Preflight       bool     `json:"preflight,omitempty"`
+	RequiresCluster bool     `json:"requires_cluster,omitempty"`
+	Retry           *Retry   `json:"retry,omitempty"`
 }
 
 func Load(platformPath string) (*Resolved, error) { return LoadWithMode(platformPath, false) }
@@ -585,7 +607,23 @@ func (r *Resolved) RunSteps(runner *executor.Runner, phase string, skipCompleted
 
 // RunPlannedSteps executes the captured steps without re-rendering template input.
 func RunPlannedSteps(runner *executor.Runner, phase string, steps []PlannedStep, skipCompleted map[string]bool, beforeStep func() error, markCompleted func(string) error) error {
+	return RunPlannedStepsGuarded(runner, phase, steps, skipCompleted, beforeStep, nil, markCompleted)
+}
+
+// RunPlannedStepsGuarded checks target identity before each attempt, including retries.
+func RunPlannedStepsGuarded(runner *executor.Runner, phase string, steps []PlannedStep, skipCompleted map[string]bool, beforeStep func() error, guard func(PlannedStep) error, markCompleted func(string) error) error {
 	for _, planned := range steps {
+		beforeAttempt := func() error {
+			if beforeStep != nil {
+				if err := beforeStep(); err != nil {
+					return err
+				}
+			}
+			if guard != nil {
+				return guard(planned)
+			}
+			return nil
+		}
 		if beforeStep != nil {
 			if err := beforeStep(); err != nil {
 				return err
@@ -599,7 +637,7 @@ func RunPlannedSteps(runner *executor.Runner, phase string, steps []PlannedStep,
 			fmt.Fprintf(runner.Stdout, "\n==> skipping completed step %s\n", stepID)
 			continue
 		}
-		err := runPlannedStep(runner, phase, stepID, planned, beforeStep)
+		err := runPlannedStep(runner, phase, stepID, planned, beforeAttempt)
 		if err != nil {
 			return apperror.WithRemediation(
 				apperror.WithContext(
@@ -788,16 +826,17 @@ func (r *Resolved) planStep(index int, step Step) (PlannedStep, error) {
 		stepNameForID = step.ID
 	}
 	return PlannedStep{
-		ID:             stableStepName(stepNameForID),
-		Index:          index,
-		Name:           name,
-		Command:        command,
-		Args:           args,
-		Dir:            filepath.Clean(dir),
-		TimeoutSeconds: step.TimeoutSeconds,
-		Suggestion:     suggestion,
-		Preflight:      step.Preflight,
-		Retry:          plannedRetry(step.Retry),
+		ID:              stableStepName(stepNameForID),
+		Index:           index,
+		Name:            name,
+		Command:         command,
+		Args:            args,
+		Dir:             filepath.Clean(dir),
+		TimeoutSeconds:  step.TimeoutSeconds,
+		Suggestion:      suggestion,
+		Preflight:       step.Preflight,
+		RequiresCluster: step.RequiresCluster,
+		Retry:           plannedRetry(step.Retry),
 	}, nil
 }
 

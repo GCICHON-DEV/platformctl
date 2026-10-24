@@ -1,7 +1,6 @@
 package deps
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -13,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"platformctl/internal/checkexec"
 )
 
 type Tool struct {
@@ -26,10 +27,11 @@ type Tool struct {
 }
 
 type Status struct {
-	Tool      Tool   `json:"tool"`
-	Installed bool   `json:"installed"`
-	Path      string `json:"path,omitempty"`
-	Version   string `json:"version,omitempty"`
+	Tool       Tool   `json:"tool"`
+	Installed  bool   `json:"installed"`
+	Path       string `json:"path,omitempty"`
+	Version    string `json:"version,omitempty"`
+	CheckError string `json:"check_error,omitempty"`
 }
 
 func RuntimeTools() []Tool {
@@ -56,10 +58,18 @@ func Check(tools []Tool) []Status {
 }
 
 func CheckOne(tool Tool) Status {
+	return CheckOneContext(context.Background(), 5*time.Second, tool)
+}
+
+func CheckOneContext(ctx context.Context, timeout time.Duration, tool Tool) Status {
 	path, err := lookPath(tool)
 	status := Status{Tool: tool, Installed: err == nil, Path: path}
 	if status.Installed {
-		status.Version = version(tool)
+		var err error
+		status.Version, err = version(ctx, timeout, tool)
+		if err != nil {
+			status.CheckError = err.Error()
+		}
 	}
 	return status
 }
@@ -75,6 +85,12 @@ func Missing(statuses []Status) []Tool {
 }
 
 func VersionProblem(status Status) string {
+	if status.CheckError != "" {
+		return status.Tool.Name + " version check failed: " + status.CheckError
+	}
+	if status.Installed && status.Version == "" && (status.Tool.Version != "" || status.Tool.MinVersion != "") {
+		return status.Tool.Name + " version check returned no version"
+	}
 	if !status.Installed || status.Version == "" {
 		return ""
 	}
@@ -152,34 +168,23 @@ func ManualInstallInstructions(tools []Tool) string {
 	return strings.TrimSpace(b.String())
 }
 
-func version(tool Tool) string {
+func version(ctx context.Context, timeout time.Duration, tool Tool) (string, error) {
 	if len(tool.VersionArgs) == 0 {
-		return ""
+		return "", nil
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	path, err := lookPath(tool)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	cmd := exec.CommandContext(ctx, path, tool.VersionArgs...)
+	env := os.Environ()
 	if tool.PathEnv != "" {
-		cmd.Env = appendEnvPath(tool.PathEnv)
+		env = appendEnvPath(tool.PathEnv)
 	}
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		return ""
+	output, err := checkexec.Run(ctx, timeout, path, tool.VersionArgs, env)
+	if err != nil {
+		return "", err
 	}
-
-	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(lines[0])
+	return strings.TrimSpace(strings.SplitN(string(output), "\n", 2)[0]), nil
 }
 
 func lookPath(tool Tool) (string, error) {
