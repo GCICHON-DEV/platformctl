@@ -75,7 +75,7 @@ func newInitCmd() *cobra.Command {
 				return apperror.Wrap(err, apperror.CategoryConfig, "PLATFORMCTL_CONFIG_WRITE", "could not write platform.yaml")
 			}
 			printf(cmd, "Created %s using template %s.\n", defaultConfigFile, templateSource)
-			resolved, err := templateengine.Load(defaultConfigFile)
+			resolved, err := templateengine.LoadWithMode(defaultConfigFile, options.Offline)
 			if err != nil {
 				return apperror.Wrap(err, apperror.CategoryConfig, "PLATFORMCTL_CONFIG_LOAD", "could not load platform.yaml")
 			}
