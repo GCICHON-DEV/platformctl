@@ -23,6 +23,8 @@ import (
 	"platformctl/internal/executor"
 
 	"gopkg.in/yaml.v3"
+
+	"platformctl/internal/safepath"
 )
 
 const (
@@ -524,7 +526,7 @@ func (r *Resolved) GenerateWithPrevious(previousManaged []string) ([]string, err
 // GenerateWithPrevious publishes captured preview bytes as a recoverable file
 // transaction. The caller must hold the workspace workflow lock.
 func (p *ExecutionPlan) GenerateWithPrevious(previousManaged []string) ([]string, error) {
-	return p.generateTransaction(previousManaged, transactionIO{os.WriteFile, os.Rename})
+	return p.generateTransaction(previousManaged, transactionIO{safepath.WriteFile, os.Rename})
 }
 
 func pruneGeneratedDir(dir string) {
@@ -534,11 +536,16 @@ func pruneGeneratedDir(dir string) {
 		if clean == stop {
 			return
 		}
-		entries, err := os.ReadDir(clean)
+		dir, err := safepath.OpenDir(".", clean, false)
+		if err != nil {
+			return
+		}
+		entries, err := dir.ReadDir(-1)
+		dir.Close()
 		if err != nil || len(entries) != 0 {
 			return
 		}
-		if err := os.Remove(clean); err != nil {
+		if err := safepath.Remove(clean); err != nil {
 			return
 		}
 		clean = filepath.Dir(clean)
@@ -719,7 +726,7 @@ func (r *Resolved) GeneratedHash() (string, error) {
 	}
 	var b strings.Builder
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
+		data, err := safepath.ReadFile(".", path)
 		if err != nil {
 			return "", err
 		}
@@ -826,7 +833,7 @@ func (r *Resolved) generatedSource(file GeneratedFile) (string, error) {
 		if filepath.IsAbs(cleanSource) || strings.HasPrefix(cleanSource, "..") {
 			return "", fmt.Errorf("template file source %q must be relative to template directory", file.Source)
 		}
-		data, err := os.ReadFile(filepath.Join(r.Info.BaseDir, cleanSource))
+		data, err := safepath.ReadFile(r.Info.BaseDir, cleanSource)
 		if err != nil {
 			return "", err
 		}

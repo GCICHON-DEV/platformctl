@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"platformctl/internal/safepath"
 )
 
 // Per-call operations let tests inject filesystem failures without global hooks.
@@ -98,7 +100,7 @@ func (p *ExecutionPlan) generateTransaction(previous []string, fs transactionIO)
 			// Existing files retain their exact permissions. New files keep the
 			// permissions selected by WriteFile and the process umask.
 			if change.existed {
-				if err := os.Chmod(change.staged, change.mode); err != nil {
+				if err := safepath.Chmod(change.staged, change.mode); err != nil {
 					return nil, fmt.Errorf("stage permissions %s: %w", change.path, err)
 				}
 			}
@@ -110,19 +112,19 @@ func (p *ExecutionPlan) generateTransaction(previous []string, fs transactionIO)
 		for i := len(changes) - 1; i >= 0; i-- {
 			change := &changes[i]
 			if change.installed {
-				if err := os.Remove(change.path); err != nil {
+				if err := safepath.Remove(change.path); err != nil {
 					failures = append(failures, fmt.Errorf("remove replacement %s: %w", change.path, err))
 					continue
 				}
 			}
 			if change.backup != "" {
-				if err := fs.rename(change.backup, change.path); err != nil {
+				if err := safepath.Rename(change.backup, change.path, fs.rename); err != nil {
 					failures = append(failures, fmt.Errorf("restore %s from %s: %w", change.path, change.backup, err))
 				}
 			}
 		}
 		for i := len(createdDirs) - 1; i >= 0; i-- {
-			if err := os.Remove(createdDirs[i]); err != nil {
+			if err := safepath.Remove(createdDirs[i]); err != nil {
 				failures = append(failures, fmt.Errorf("remove created directory %s: %w", createdDirs[i], err))
 			}
 		}
@@ -141,13 +143,13 @@ func (p *ExecutionPlan) generateTransaction(previous []string, fs transactionIO)
 		}
 		if change.existed {
 			backup := filepath.Join(stage, fmt.Sprintf("old-%d", i))
-			if err := fs.rename(change.path, backup); err != nil {
+			if err := safepath.Rename(change.path, backup, fs.rename); err != nil {
 				return rollback(fmt.Errorf("back up %s: %w", change.path, err))
 			}
 			change.backup = backup
 		}
 		if change.staged != "" {
-			if err := fs.rename(change.staged, change.path); err != nil {
+			if err := safepath.Rename(change.staged, change.path, fs.rename); err != nil {
 				return rollback(fmt.Errorf("publish %s: %w", change.path, err))
 			}
 			change.installed = true
@@ -187,12 +189,9 @@ func makeGeneratedDirs(dir string, created *[]string) error {
 	if dir == "." {
 		return nil
 	}
-	info, err := os.Lstat(dir)
+	handle, err := safepath.OpenDir(".", dir, false)
 	if err == nil {
-		if !info.IsDir() {
-			return fmt.Errorf("unsafe generated directory %s", dir)
-		}
-		return nil
+		return handle.Close()
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -200,9 +199,10 @@ func makeGeneratedDirs(dir string, created *[]string) error {
 	if err := makeGeneratedDirs(filepath.Dir(dir), created); err != nil {
 		return err
 	}
-	if err := os.Mkdir(dir, 0755); err != nil {
+	handle, err = safepath.OpenDir(".", dir, true)
+	if err != nil {
 		return err
 	}
 	*created = append(*created, dir)
-	return nil
+	return handle.Close()
 }

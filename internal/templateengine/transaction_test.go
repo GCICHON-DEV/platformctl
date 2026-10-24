@@ -251,3 +251,41 @@ func TestTransactionRetainsBackupsWhenRollbackFails(t *testing.T) {
 		t.Fatalf("original backup lost: %q, %v", data, readErr)
 	}
 }
+
+func TestTransactionRejectsParentSwapAfterStaging(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		t.Run(fmt.Sprint(stale), func(t *testing.T) {
+			chdirForTest(t, t.TempDir())
+			outside := t.TempDir()
+			writeFile(t, filepath.Join(outside, "file"), "private")
+			writeFile(t, "generated/file", "old")
+			p := transactionPlan(map[string]string{"generated/file": "new"})
+			if stale {
+				p = transactionPlan(map[string]string{"generated/new": "new"})
+			}
+			swapped := false
+			_, err := p.generateTransaction([]string{"generated/file"}, transactionIO{func(path string, data []byte, mode os.FileMode) error {
+				if !swapped {
+					if err := os.Rename("generated", "original"); err != nil {
+						return err
+					}
+					if err := os.Symlink(outside, "generated"); err != nil {
+						return err
+					}
+					swapped = true
+				}
+				return os.WriteFile(path, data, mode)
+			}, os.Rename})
+			if err == nil {
+				t.Fatal("expected unsafe parent rejection")
+			}
+			data, err := os.ReadFile(filepath.Join(outside, "file"))
+			if err != nil || string(data) != "private" {
+				t.Fatalf("outside changed: %q %v", data, err)
+			}
+			if _, err := os.Stat(filepath.Join(outside, "new")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("outside file created: %v", err)
+			}
+		})
+	}
+}

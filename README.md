@@ -236,3 +236,23 @@ go build -o platformctl .
 The audit distinguishes static validation from real Kind/AWS acceptance. Cloud provisioning is not part of the planning/setup change.
 
 Kontrakt izolacji runnerów testowych i granice przygotowania PLAT-44: [runner sandbox](docs/runner-sandbox.md).
+
+### Zaufanie szablonom i granice workspace
+
+Uruchamiaj wyłącznie zaufane szablony. `command` i `args` wykonują dowolny
+program z uprawnieniami użytkownika, odziedziczonym środowiskiem i dostępem do
+jego plików oraz sieci. CLI nie jest sandboxem: komenda może sama zmienić katalog
+(np. przez `sh -c` albo `terraform -chdir`) i odczytywać lub modyfikować inne pliki.
+
+Operacje plikowe CLI odrzucają symlinki w ścieżkach `generated/`, w lokalnym
+`files[].source` względem katalogu szablonu oraz w katalogu roboczym kroku (`dir`).
+Katalog szablonu i bieżący workspace stanowią wybrane przez operatora granice
+zaufania. Na Linuksie otwarte deskryptory katalogów chronią operacje również
+przy podmianie komponentu ścieżki na symlink między walidacją a użyciem. Odczyt
+source wymaga zwykłego pliku, zapis jest publikowany przez rename, a usuwanie
+nie podąża za końcowym symlinkiem. Katalog cwd jest przypięty przed startem
+procesu. Wymagany jest dostęp do `/proc`.
+Na pozostałych systemach te operacje kończą się jawnym błędem zamiast słabszej
+walidacji. Ochrona nie izoluje od procesu z tymi samymi uprawnieniami, który
+przenosi już otwarte katalogi poza workspace, ani od zmian zawartości pliku
+przez inny proces. Nie stanowi też izolacji przed hardlinkami lub mountami.

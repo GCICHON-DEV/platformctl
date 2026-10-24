@@ -354,3 +354,20 @@ func chdirForTest(t *testing.T, directory string) {
 		}
 	})
 }
+
+func TestGeneratedSourceRejectsSymlinks(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(outside, "source"), "private")
+	r := &Resolved{Info: SourceInfo{BaseDir: root}}
+	for _, item := range []struct{ name, target, source string }{
+		{"parent", outside, "parent/source"},
+		{"leaf", filepath.Join(outside, "source"), "leaf"},
+	} {
+		if err := os.Symlink(item.target, filepath.Join(root, item.name)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.generatedSource(GeneratedFile{Source: item.source}); err == nil {
+			t.Fatalf("accepted symlink source %s", item.source)
+		}
+	}
+}

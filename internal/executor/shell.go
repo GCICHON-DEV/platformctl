@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"platformctl/internal/safepath"
 )
 
 type StepOptions struct {
@@ -49,6 +51,16 @@ func (r *Runner) RunStepWithOptions(options StepOptions) error {
 		return err
 	}
 
+	directory := options.Dir
+	if directory == "" {
+		directory = "."
+	}
+	cwd, err := safepath.OpenDir(".", directory, false)
+	if err != nil {
+		return fmt.Errorf("unsafe step cwd %q: %w", directory, err)
+	}
+	defer cwd.Close()
+
 	timeout := time.Duration(options.TimeoutSeconds) * time.Second
 	if timeout == 0 {
 		timeout = 30 * time.Minute
@@ -75,9 +87,9 @@ func (r *Runner) RunStepWithOptions(options StepOptions) error {
 	if r.PathEnv != "" {
 		cmd.Env = appendPathEnv(r.PathEnv)
 	}
-	if options.Dir != "" && options.Dir != "." {
-		cmd.Dir = options.Dir
-	}
+	// Go chdirs before remapping ExtraFiles and before close-on-exec. The
+	// child inherits this descriptor for chdir, then closes it at exec.
+	cmd.Dir = fmt.Sprintf("/proc/self/fd/%d", cwd.Fd())
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
 
