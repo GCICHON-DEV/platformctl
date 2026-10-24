@@ -6,16 +6,16 @@ import (
 	"io"
 	"strings"
 
+	"platformctl/internal/apperror"
 	"platformctl/internal/templateengine"
 )
 
-func printExecutionPlan(w io.Writer, plan *templateengine.ExecutionPlan) {
+func printExecutionPlan(w io.Writer, plan *templateengine.ExecutionPlan) error {
 	if options.JSON {
-		writeJSON(w, map[string]interface{}{"ok": true, "plan": plan})
-		return
+		return writeJSON(w, map[string]interface{}{"ok": true, "plan": plan})
 	}
 	if options.Quiet {
-		return
+		return nil
 	}
 	fmt.Fprintf(w, "CLI workflow preview (not a Terraform saved plan).\nDigest: %s\nTarget digest: %s\nTemplate: %s\n", plan.Digest, plan.TargetDigest, plan.TemplateName)
 	fmt.Fprintf(w, "Source:   %s\n", plan.TemplateSource.Resolved)
@@ -67,6 +67,7 @@ func printExecutionPlan(w io.Writer, plan *templateengine.ExecutionPlan) {
 	printSteps(w, "Plan steps", plan.PlanSteps)
 	printSteps(w, "Apply steps", plan.ApplySteps)
 	printSteps(w, "Destroy steps", plan.DestroySteps)
+	return nil
 }
 
 func printSteps(w io.Writer, title string, steps []templateengine.PlannedStep) {
@@ -90,10 +91,22 @@ func printSteps(w io.Writer, title string, steps []templateengine.PlannedStep) {
 	fmt.Fprintln(w)
 }
 
-func writeJSON(w io.Writer, payload interface{}) {
-	encoder := json.NewEncoder(w)
-	encoder.SetIndent("", "  ")
-	_ = encoder.Encode(payload)
+// Encode the complete document before writing: encoding failures must not leave
+// a partial success document ahead of the command's error response.
+func writeJSON(w io.Writer, payload interface{}) error {
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return apperror.Wrap(err, apperror.CategoryInternal, "PLATFORMCTL_OUTPUT_ENCODE", "could not encode JSON output")
+	}
+	data = append(data, '\n')
+	n, err := w.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return apperror.Wrap(err, apperror.CategoryInternal, "PLATFORMCTL_OUTPUT_WRITE", "could not write command output")
+	}
+	return nil
 }
 
 func printf(cmd interface{ OutOrStdout() io.Writer }, format string, args ...interface{}) {

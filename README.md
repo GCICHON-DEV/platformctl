@@ -38,7 +38,7 @@ platformctl apply --verbose
 platformctl plan --quiet
 ```
 
-`--json` is intended for automation. Destructive commands require `--yes` with `--json` so prompts do not corrupt machine-readable output. `--verbose` includes the wrapped technical cause for failures.
+`--json` writes one JSON document to stdout, including command errors; stderr carries workflow streams and output-delivery diagnostics. Destructive commands require `--yes` with `--json` so prompts do not corrupt machine-readable output. `--verbose` includes wrapped technical causes in human-readable failures. See the [output and exit-code contract](docs/cli-output.md), including migration from error JSON on stderr.
 
 ## Templates
 

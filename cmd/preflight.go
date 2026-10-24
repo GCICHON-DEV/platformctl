@@ -59,7 +59,7 @@ func newPreflightCmd() *cobra.Command {
 				return apperror.New(apperror.CategoryDependency, "PLATFORMCTL_PREFLIGHT_FAILED", "preflight checks failed")
 			}
 			if options.JSON {
-				writeJSON(cmd.OutOrStdout(), result)
+				return writeJSON(cmd.OutOrStdout(), result)
 			}
 			return nil
 		},

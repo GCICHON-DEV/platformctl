@@ -93,7 +93,7 @@ func newInitCmd() *cobra.Command {
 				println(cmd, "\nInit complete with warnings. Fix the reported items before platformctl apply.")
 			}
 			if options.JSON {
-				writeJSON(cmd.OutOrStdout(), map[string]interface{}{"ok": result.OK, "config": defaultConfigFile, "template": templateSource, "preflight": result})
+				return writeJSON(cmd.OutOrStdout(), map[string]interface{}{"ok": result.OK, "config": defaultConfigFile, "template": templateSource, "preflight": result})
 			}
 			return nil
 		},
