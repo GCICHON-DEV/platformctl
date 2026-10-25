@@ -80,6 +80,13 @@ func newApplyCmd() *cobra.Command {
 			if err := validateRecordedPlan(current, plan, st, "apply", resume); err != nil {
 				return err
 			}
+			if err := requireDeclaredTarget(resolved); err != nil {
+				return err
+			}
+			bootstrap, err := prepareBootstrap(resolved, plan, st, resume)
+			if err != nil {
+				return err
+			}
 			for _, step := range plan.ApplySteps {
 				if err := validateStepTarget(resolved, step); err != nil {
 					return err
@@ -90,15 +97,18 @@ func newApplyCmd() *cobra.Command {
 				return err
 			}
 			phase := "apply"
-			if resolved.Platform.Target == nil || resolved.Platform.Target.Bootstrap {
+			if resolved.Platform.Target != nil && resolved.Platform.Target.Bootstrap {
 				phase = "bootstrap"
+			}
+			if bootstrap != nil && bootstrap.resumed {
+				phase = "apply"
 			}
 			preflight, err := runPreflightPhase(cmd, resolved, true, phase, 5*time.Second)
 			if err != nil {
 				return err
 			}
 			if !preflight.OK {
-				return apperror.New(apperror.CategoryDependency, "PLATFORMCTL_PREFLIGHT_FAILED", "required preflight checks failed")
+				return preflightFailure(preflight)
 			}
 			runner := executor.NewRunner(workflowStdout(cmd.OutOrStdout(), cmd.ErrOrStderr()), cmd.ErrOrStderr()).WithPathEnv(manager.PathEnv()).WithWorkflowLock(lock.File()).WithEnvironment(targetEnvironment(resolved.Platform.Target))
 			if err := runner.RequireTools(resolved.RequiredTools()...); err != nil {
@@ -149,8 +159,16 @@ func newApplyCmd() *cobra.Command {
 				if err := validateStepTarget(resolved, step); err != nil {
 					return err
 				}
-				return requireTarget(cmd.Context(), manager.PathEnv(), resolved, phase != "bootstrap" || clusterStep(step))
+				if bootstrap != nil {
+					return bootstrap.before(cmd.Context(), manager.PathEnv(), resolved, st, step)
+				}
+				return requireTargetAt(cmd.Context(), manager.PathEnv(), resolved, phase != "bootstrap" || clusterStep(step), step.Dir)
 			}, func(stepID string) error {
+				if bootstrap != nil {
+					if err := bootstrap.after(cmd.Context(), manager.PathEnv(), resolved, plan, st, stepID); err != nil {
+						return err
+					}
+				}
 				st.CompletedSteps[stepID] = true
 				st.LastPhase = "apply"
 				return state.Save(st)

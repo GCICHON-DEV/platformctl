@@ -70,7 +70,7 @@ func newPreflightCmd() *cobra.Command {
 				return err
 			}
 			if !result.OK && strict {
-				return apperror.New(apperror.CategoryDependency, "PLATFORMCTL_PREFLIGHT_FAILED", "preflight checks failed")
+				return preflightFailure(result)
 			}
 			if options.JSON {
 				return writeJSON(cmd.OutOrStdout(), result)
@@ -98,6 +98,23 @@ func runPreflightPhase(cmd *cobra.Command, resolved *templateengine.Resolved, st
 		printf(cmd, "Checksum: %s\n", resolved.Info.Checksum)
 	}
 
+	missingIdentity := requiredTargetChecks(resolved)
+	if len(missingIdentity) > 0 {
+		result.OK = false
+		result.Checks = append(result.Checks, missingIdentity...)
+		if strict {
+			return result, requireDeclaredTarget(resolved)
+		}
+	}
+	if resolved.Platform.Target != nil && resolved.Platform.Target.Bootstrap {
+		plan, err := resolved.BuildPlan()
+		if err != nil {
+			return result, err
+		}
+		if _, err := bootstrapDefinition(resolved, plan); err != nil {
+			return result, err
+		}
+	}
 	manager, err := toolchain.New(nil, nil)
 	if err != nil {
 		return result, apperror.Wrap(err, apperror.CategoryDependency, "PLATFORMCTL_TOOLCHAIN_FAILED", "toolchain preflight failed")
@@ -163,6 +180,23 @@ func runPreflightPhase(cmd *cobra.Command, resolved *templateengine.Resolved, st
 	}
 	checks := localReadinessChecks(ctx, timeout, manager.PathEnv(), resolved, phase)
 	checks = append(checks, targetChecks(ctx, timeout, manager.PathEnv(), resolved, phase != "bootstrap")...)
+	workflowPhase := phase
+	if workflowPhase == "bootstrap" {
+		workflowPhase = "apply"
+	}
+	seenDirs := map[string]bool{"": true, ".": true}
+	for _, step := range resolved.StepsFor(workflowPhase) {
+		directory, err := resolved.Render(step.Dir)
+		if err != nil {
+			checks = append(checks, checkStatus{Name: "step working directory", Message: "could not render step working directory"})
+			continue
+		}
+		if seenDirs[directory] {
+			continue
+		}
+		seenDirs[directory] = true
+		checks = append(checks, targetChecksAt(ctx, timeout, manager.PathEnv(), resolved, phase != "bootstrap", directory)...)
+	}
 	identityWarnings := []string{}
 	if resolved.Platform.Target == nil {
 		identityWarnings = append(identityWarnings, "target identity is not verified: legacy config has no expected target")
@@ -217,18 +251,22 @@ func printDependencyStatus(cmd *cobra.Command, statuses []deps.Status) {
 
 func localReadinessChecks(ctx context.Context, timeout time.Duration, pathEnv string, resolved *templateengine.Resolved, phase string) []checkStatus {
 	checks := []checkStatus{workspaceCheck("workspace", "."), workspaceCheck("local state directory", state.DirName)}
+	stateReadable := true
 	if info, err := os.Lstat(filepath.Join(state.DirName, state.FileName)); err == nil && (!info.Mode().IsRegular() || info.Mode().Perm()&0222 == 0) {
+		stateReadable = false
 		checks = append(checks, checkStatus{Name: "local state file", Message: "state must be a writable regular file"})
 	} else if err != nil && !os.IsNotExist(err) {
 		checks = append(checks, checkStatus{Name: "local state file", Message: "state cannot be inspected"})
 	}
-	if _, err := state.Load(); err != nil {
-		checks = append(checks, checkStatus{Name: "local state", Message: "state is unreadable or malformed"})
+	if stateReadable {
+		if _, err := state.Load(); err != nil {
+			checks = append(checks, checkStatus{Name: "local state", Message: "state is unreadable or malformed"})
+		}
 	}
 	if hasTool(resolved, "docker") {
 		checks = append(checks, commandCheck(ctx, timeout, "docker daemon", pathEnv, "docker", "info"))
 	}
-	if phase != "bootstrap" && phaseNeedsCluster(resolved, phase) {
+	if phase != "bootstrap" && phaseNeedsCluster(resolved, phase) && (resolved.Platform.Target == nil || resolved.Platform.Target.Kubernetes == nil) {
 		checks = append(checks, commandCheck(ctx, timeout, "kubectl current context", pathEnv, "kubectl", "config", "current-context"))
 	}
 	return checks
@@ -303,4 +341,15 @@ func hasTool(resolved *templateengine.Resolved, name string) bool {
 		}
 	}
 	return false
+}
+
+func preflightFailure(result *preflightResult) error {
+	message := "required preflight checks failed"
+	for _, check := range result.Checks {
+		if !check.OK {
+			message = check.Name + ": " + check.Message
+			break
+		}
+	}
+	return apperror.New(apperror.CategoryDependency, "PLATFORMCTL_PREFLIGHT_FAILED", message)
 }

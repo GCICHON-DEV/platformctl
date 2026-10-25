@@ -19,10 +19,15 @@ var ErrOutputLimit = errors.New("check output exceeds 32 KiB")
 // Run captures both streams under one cap. No stdin or caller output writer is
 // inherited. Timeout includes descendants holding stdout/stderr open.
 func Run(ctx context.Context, timeout time.Duration, path string, args, env []string) ([]byte, error) {
+	return RunInDir(ctx, timeout, path, args, env, "")
+}
+
+func RunInDir(ctx context.Context, timeout time.Duration, path string, args, env []string, directory string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Env = env
+	cmd.Dir = directory
 	cleanup := configure(cmd)
 	defer cleanup()
 	cmd.WaitDelay = 100 * time.Millisecond

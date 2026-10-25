@@ -137,11 +137,16 @@ func TestClusterStepContract(t *testing.T) {
 
 func TestConflictingDirectTargetSelectors(t *testing.T) {
 	r := &templateengine.Resolved{Values: map[string]interface{}{"region": "eu-central-1", "aws_profile": "a"}, Platform: templateengine.PlatformFile{Target: &templateengine.Target{AWS: &templateengine.AWSTarget{Account: "111111111111", Region: "eu-central-1", Profile: "a"}, Kubernetes: &templateengine.KubernetesTarget{Context: "a", Cluster: "cluster-a", Server: "https://a.invalid"}}}}
+	r.Platform.Target.ClusterName = "cluster-a"
 	for _, tc := range []struct {
 		command string
 		args    []string
 	}{
 		{"aws", []string{"--profile", "b", "sts", "get-caller-identity"}},
+		{"aws", []string{"eks", "create-cluster", "--name", "cluster-b"}},
+		{"aws", []string{"eks", "update-kubeconfig", "--name", "cluster-b"}},
+		{"aws", []string{"eks", "update-kubeconfig", "--name", "cluster-a", "--kubeconfig", "/foreign"}},
+		{"kind", []string{"create", "cluster", "--name", "cluster-a", "--kubeconfig", "/foreign"}},
 		{"aws", []string{"--profile=a", "--profile=b", "sts", "get-caller-identity"}},
 		{"aws", []string{"--prof", "b", "sts", "get-caller-identity"}},
 		{"aws", []string{"--region=eu-west-1", "eks", "list-clusters"}},

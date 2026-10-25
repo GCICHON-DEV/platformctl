@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -19,12 +20,61 @@ import (
 var accountID = regexp.MustCompile(`^[0-9]{12}$`)
 var regionID = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`)
 
+func requiredTargetChecks(resolved *templateengine.Resolved) []checkStatus {
+	aws, kube := false, false
+	inspect := func(name string) {
+		switch filepath.Base(name) {
+		case "aws", "terraform":
+			aws = true
+		case "kubectl", "helm", "kind":
+			kube = true
+		}
+	}
+	for _, tool := range resolved.RequirementTools() {
+		inspect(tool.Name)
+	}
+	for _, phase := range []string{"apply", "destroy"} {
+		for _, step := range resolved.StepsFor(phase) {
+			command, err := resolved.Render(step.Command)
+			if err == nil {
+				inspect(command)
+			} else {
+				return []checkStatus{{Name: "workflow identity", Message: "workflow command could not be resolved"}}
+			}
+			if step.RequiresCluster || step.EstablishesClusterTarget {
+				kube = true
+			}
+		}
+	}
+	var checks []checkStatus
+	target := resolved.Platform.Target
+	if aws && (target == nil || target.AWS == nil) {
+		checks = append(checks, checkStatus{Name: "required AWS identity", Message: "infrastructure workflow requires target.aws account/region/profile; configure target and review a new plan"})
+	}
+	if kube && (target == nil || target.Kubernetes == nil) {
+		checks = append(checks, checkStatus{Name: "required Kubernetes identity", Message: "infrastructure workflow requires target.kubernetes context/cluster/server; configure target and review a new plan"})
+	}
+	return checks
+}
+
+func requireDeclaredTarget(resolved *templateengine.Resolved) error {
+	if checks := requiredTargetChecks(resolved); len(checks) > 0 {
+		return apperror.New(apperror.CategoryDependency, "PLATFORMCTL_TARGET_REQUIRED", checks[0].Message)
+	}
+	return nil
+}
+
 func targetChecks(ctx context.Context, timeout time.Duration, pathEnv string, resolved *templateengine.Resolved, cluster bool) []checkStatus {
+	return targetChecksAt(ctx, timeout, pathEnv, resolved, cluster, "")
+}
+
+func targetChecksAt(ctx context.Context, timeout time.Duration, pathEnv string, resolved *templateengine.Resolved, cluster bool, directory string) []checkStatus {
 	target := resolved.Platform.Target
 	if target == nil {
 		return nil
 	}
 	var checks []checkStatus
+	accountVerified := false
 	fail := func(name, message string) { checks = append(checks, checkStatus{Name: name, Message: message}) }
 	if target.ClusterName != "" {
 		if value, ok := resolved.Values["cluster_name"]; !validSelector(target.ClusterName) || !ok || fmt.Sprint(value) != target.ClusterName {
@@ -50,7 +100,7 @@ func targetChecks(ctx context.Context, timeout time.Duration, pathEnv string, re
 			fail("AWS target", "target.aws requires a 12-digit account, region and profile matching declared input selectors")
 		} else {
 			args := []string{"sts", "get-caller-identity", "--profile", aws.Profile, "--region", aws.Region, "--output", "json"}
-			out, err := targetOutput(ctx, timeout, pathEnv, target, "aws", args...)
+			out, err := targetOutput(ctx, timeout, pathEnv, target, directory, "aws", args...)
 			var identity struct {
 				Account string `json:"Account"`
 			}
@@ -58,6 +108,7 @@ func targetChecks(ctx context.Context, timeout time.Duration, pathEnv string, re
 				fail("AWS account", "AWS identity check failed or returned a different account")
 			} else {
 				checks = append(checks, checkStatus{Name: "AWS account", OK: true})
+				accountVerified = true
 			}
 			checks = append(checks, checkStatus{Name: "AWS region", OK: true, Message: "workflow region is scoped to target.aws.region"})
 		}
@@ -68,11 +119,38 @@ func targetChecks(ctx context.Context, timeout time.Duration, pathEnv string, re
 				fail("Kubernetes environment", key+" conflicts with declared target")
 			}
 		}
-		u, err := url.Parse(kube.Server)
-		if !validSelector(kube.Context) || !validSelector(kube.Cluster) || err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			fail("Kubernetes target", "target.kubernetes requires context, cluster and HTTPS server without credentials")
+		server := kube.Server
+		sourceOK := kube.EndpointSource == "" || kube.EndpointSource == "eks" || kube.EndpointSource == "kind"
+		if kube.EndpointSource == "eks" && cluster && !accountVerified {
+			fail("EKS identity", "expected AWS account was not verified")
+			sourceOK = false
+		}
+		if kube.EndpointSource == "eks" && cluster && accountVerified {
+			endpoint, lookupErr := eksEndpoint(ctx, timeout, pathEnv, target, directory)
+			if lookupErr != nil {
+				fail("EKS identity", "EKS ARN/account/region/endpoint/CA check failed")
+				sourceOK = false
+			} else {
+				server = endpoint
+			}
+		}
+		u, err := url.Parse(server)
+		endpointOK := err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
+		if kube.EndpointSource == "eks" && !cluster && server == "" {
+			endpointOK = target.AWS != nil && validSelector(target.ClusterName)
+		}
+		if kube.EndpointSource == "kind" {
+			if !endpointOK {
+				sourceOK = false
+			} else {
+				ip := net.ParseIP(u.Hostname())
+				endpointOK = endpointOK && ip != nil && ip.IsLoopback() && u.Port() != "" && validSelector(target.ClusterName) && kube.Context == "kind-"+target.ClusterName && kube.Cluster == "kind-"+target.ClusterName
+			}
+		}
+		if !validSelector(kube.Context) || !validSelector(kube.Cluster) || !sourceOK || !endpointOK {
+			fail("Kubernetes target", "expected context/cluster/endpoint policy is incomplete or invalid")
 		} else if cluster {
-			out, err := targetOutput(ctx, timeout, pathEnv, target, "kubectl", "config", "view", "--minify", "--output", "json")
+			out, err := targetOutput(ctx, timeout, pathEnv, target, directory, "kubectl", "config", "view", "--minify", "--output", "json")
 			var config struct {
 				Current  string `json:"current-context"`
 				Contexts []struct {
@@ -90,7 +168,7 @@ func targetChecks(ctx context.Context, timeout time.Duration, pathEnv string, re
 			}
 			ok := err == nil && json.Unmarshal(out, &config) == nil && config.Current == kube.Context && len(config.Contexts) == 1 && len(config.Clusters) == 1
 			if ok {
-				ok = config.Contexts[0].Name == kube.Context && config.Contexts[0].Context.Cluster == kube.Cluster && config.Clusters[0].Name == kube.Cluster && config.Clusters[0].Cluster.Server == kube.Server
+				ok = config.Contexts[0].Name == kube.Context && config.Contexts[0].Context.Cluster == kube.Cluster && config.Clusters[0].Name == kube.Cluster && config.Clusters[0].Cluster.Server == server
 			}
 			checks = append(checks, checkStatus{Name: "Kubernetes identity", OK: ok, Message: "current context, cluster and server must match the declared target"})
 		}
@@ -101,24 +179,15 @@ func targetChecks(ctx context.Context, timeout time.Duration, pathEnv string, re
 	return checks
 }
 
-func targetEnvironment(target *templateengine.Target) map[string]string {
-	if target == nil || target.AWS == nil {
-		return nil
-	}
-	// Named profile credentials and region are the same for STS and workflow
-	// children. Inherited static/web-identity credentials cannot select account B.
-	return map[string]string{
-		"AWS_PROFILE": target.AWS.Profile, "AWS_DEFAULT_PROFILE": target.AWS.Profile,
-		"AWS_REGION": target.AWS.Region, "AWS_DEFAULT_REGION": target.AWS.Region,
-		"AWS_ACCESS_KEY_ID": "", "AWS_SECRET_ACCESS_KEY": "", "AWS_SESSION_TOKEN": "", "AWS_SECURITY_TOKEN": "",
-		"AWS_WEB_IDENTITY_TOKEN_FILE": "", "AWS_ROLE_ARN": "", "AWS_ROLE_SESSION_NAME": "",
-	}
-}
+func targetEnvironment(target *templateengine.Target) map[string]string { return target.Environment() }
 
 // Reject conflicting selectors on direct tools. Trusted shell scripts and
 // Terraform provider blocks must honor their declared inputs/scoped environment.
 func validateStepTarget(resolved *templateengine.Resolved, step templateengine.PlannedStep) error {
 	target := resolved.Platform.Target
+	if step.EstablishesClusterTarget && (target == nil || !target.Bootstrap) {
+		return apperror.New(apperror.CategoryDependency, "PLATFORMCTL_TARGET_MISMATCH", "establishes_cluster_target requires an explicit bootstrap policy")
+	}
 	if target == nil {
 		return nil
 	}
@@ -133,6 +202,13 @@ func validateStepTarget(resolved *templateengine.Resolved, step templateengine.P
 			expected["--region"] = target.AWS.Region
 			expected["--endpoint-url"] = ""
 			expected["--no-sign-request"] = ""
+			expected["--kubeconfig"] = ""
+			for _, arg := range step.Args {
+				if arg == "eks" && target.ClusterName != "" {
+					expected["--name"] = target.ClusterName
+					expected["--cluster-name"] = target.ClusterName
+				}
+			}
 		}
 	case "terraform":
 		if target.AWS != nil {
@@ -166,7 +242,17 @@ func validateStepTarget(resolved *templateengine.Resolved, step templateengine.P
 			expected["--kubeconfig"] = ""
 		}
 	case "kind":
+		expected["--kubeconfig"] = ""
 		if target.ClusterName != "" {
+			found := false
+			for _, arg := range step.Args {
+				if arg == "--name" || strings.HasPrefix(arg, "--name=") {
+					found = true
+				}
+			}
+			if !found {
+				return invalid()
+			}
 			expected["--name"] = target.ClusterName
 		}
 	}
@@ -206,7 +292,7 @@ func validSelector(value string) bool {
 	return value != "" && len(value) <= 256 && !strings.ContainsAny(value, "\r\n\x00") && !strings.HasPrefix(value, "-")
 }
 
-func targetOutput(ctx context.Context, timeout time.Duration, pathEnv string, target *templateengine.Target, name string, args ...string) ([]byte, error) {
+func targetOutput(ctx context.Context, timeout time.Duration, pathEnv string, target *templateengine.Target, directory string, name string, args ...string) ([]byte, error) {
 	path, err := lookPathInEnv(pathEnv, name)
 	if err != nil {
 		return nil, err
@@ -221,11 +307,15 @@ func targetOutput(ctx context.Context, timeout time.Duration, pathEnv string, ta
 		}
 		env = append(filtered, key+"="+value)
 	}
-	return checkexec.Run(ctx, timeout, path, args, env)
+	return checkexec.RunInDir(ctx, timeout, path, args, env, directory)
 }
 
 func requireTarget(ctx context.Context, pathEnv string, resolved *templateengine.Resolved, cluster bool) error {
-	for _, check := range targetChecks(ctx, 5*time.Second, pathEnv, resolved, cluster) {
+	return requireTargetAt(ctx, pathEnv, resolved, cluster, "")
+}
+
+func requireTargetAt(ctx context.Context, pathEnv string, resolved *templateengine.Resolved, cluster bool, directory string) error {
+	for _, check := range targetChecksAt(ctx, 5*time.Second, pathEnv, resolved, cluster, directory) {
 		if !check.OK {
 			return apperror.New(apperror.CategoryDependency, "PLATFORMCTL_TARGET_MISMATCH", check.Name+": "+check.Message)
 		}

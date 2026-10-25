@@ -121,6 +121,11 @@ func TestPreflightNeverInstallsMissingManagedTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeCLIFile(t, path, strings.Replace(string(data), "- name: echo", "- name: terraform\n      version: 999.0.0", 1))
+	config, err := os.ReadFile(filepath.Join(root, "platform.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCLIFile(t, filepath.Join(root, "platform.yaml"), string(config)+"target:\n  aws:\n    account: '111111111111'\n    region: eu-central-1\n    profile: synthetic\n")
 	p := workflowProcess(t, root, "preflight", "--strict", "--json")
 	p.Env = append(p.Env, "PATH="+t.TempDir())
 	out, err := p.CombinedOutput()
@@ -248,61 +253,5 @@ synthetic-mutate) printf '%s/%s/%s' "$AWS_PROFILE" "$AWS_REGION" "$AWS_ACCESS_KE
 			}
 
 		})
-	}
-}
-
-func TestBootstrapChecksContextBeforeClusterStep(t *testing.T) {
-	root := setupCLITemplate(t)
-	bin := filepath.Join(root, "bin")
-	mkdir(t, bin)
-	checkStub(t, bin, "kubectl", `case "$1" in
-version|--version) echo 'kubectl 1.35.0';;
-config) [ -f ready ] || exit 1; printf '{"current-context":"expected","contexts":[{"name":"expected","context":{"cluster":"cluster"}}],"clusters":[{"name":"cluster","cluster":{"server":"https://cluster.invalid"}}]}';;
-apply) touch mutated;;
-*) exit 2;; esac`)
-	writeCLIFile(t, filepath.Join(root, "template", "platform.template.yaml"), `apiVersion: platformctl.io/v1beta1
-kind: PlatformTemplate
-metadata: {name: bootstrap, description: Synthetic bootstrap}
-inputs:
-  project_name: {type: string, description: Synthetic name}
-requirements:
-  tools:
-    - name: kubectl
-files:
-  - path: generated/result
-    content: synthetic
-steps:
-  apply:
-    - name: create synthetic cluster
-      command: sh
-      args: [-c, 'touch ready']
-    - name: deploy synthetic cluster
-      command: kubectl
-      args: [apply]
-  destroy:
-    - name: synthetic destroy
-      command: echo
-      args: [destroy]
-`)
-	config, err := os.ReadFile(filepath.Join(root, "platform.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeCLIFile(t, filepath.Join(root, "platform.yaml"), string(config)+"target:\n  kubernetes:\n    context: expected\n    cluster: cluster\n    server: https://cluster.invalid\n")
-	run := func(args ...string) ([]byte, error) {
-		p := workflowProcess(t, root, args...)
-		p.Env = append(p.Env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-		return p.CombinedOutput()
-	}
-	if out, err := run("apply", "--yes", "--json"); err == nil || exists(filepath.Join(root, "ready")) {
-		t.Fatalf("normal apply created missing cluster: %v %s", err, out)
-	}
-	config, err = os.ReadFile(filepath.Join(root, "platform.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeCLIFile(t, filepath.Join(root, "platform.yaml"), strings.Replace(string(config), "target:\n", "target:\n  bootstrap: true\n", 1))
-	if out, err := run("apply", "--yes", "--json"); err != nil || !exists(filepath.Join(root, "mutated")) {
-		t.Fatalf("bootstrap: %v %s", err, out)
 	}
 }

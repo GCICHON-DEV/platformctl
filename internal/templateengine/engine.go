@@ -48,9 +48,11 @@ type AWSTarget struct {
 	Profile string `yaml:"profile" json:"profile"`
 }
 type KubernetesTarget struct {
-	Context string `yaml:"context" json:"context"`
-	Cluster string `yaml:"cluster" json:"cluster"`
-	Server  string `yaml:"server" json:"server"`
+	Kubeconfig     string `yaml:"kubeconfig,omitempty" json:"kubeconfig,omitempty"`
+	EndpointSource string `yaml:"endpoint_source,omitempty" json:"endpoint_source,omitempty"`
+	Context        string `yaml:"context" json:"context"`
+	Cluster        string `yaml:"cluster" json:"cluster"`
+	Server         string `yaml:"server" json:"server"`
 }
 
 type TemplateSource struct {
@@ -130,16 +132,17 @@ type Workflow struct {
 }
 
 type Step struct {
-	ID              string   `yaml:"id"`
-	Name            string   `yaml:"name"`
-	Command         string   `yaml:"command"`
-	Args            []string `yaml:"args"`
-	Dir             string   `yaml:"dir"`
-	TimeoutSeconds  int      `yaml:"timeout_seconds"`
-	Suggestion      string   `yaml:"suggestion"`
-	Preflight       bool     `yaml:"preflight"`
-	RequiresCluster bool     `yaml:"requires_cluster,omitempty"`
-	Retry           Retry    `yaml:"retry"`
+	ID                       string   `yaml:"id"`
+	Name                     string   `yaml:"name"`
+	Command                  string   `yaml:"command"`
+	Args                     []string `yaml:"args"`
+	Dir                      string   `yaml:"dir"`
+	TimeoutSeconds           int      `yaml:"timeout_seconds"`
+	Suggestion               string   `yaml:"suggestion"`
+	Preflight                bool     `yaml:"preflight"`
+	RequiresCluster          bool     `yaml:"requires_cluster,omitempty"`
+	EstablishesClusterTarget bool     `yaml:"establishes_cluster_target,omitempty"`
+	Retry                    Retry    `yaml:"retry"`
 }
 
 type Retry struct {
@@ -180,7 +183,9 @@ type ExecutionPlan struct {
 	FileDigests     map[string]string `json:"file_digests"`
 	SourceDigests   map[string]string `json:"source_digests,omitempty"`
 	contents        map[string]string
+	targetSnapshot  *targetSnapshot
 
+	Target          *Target       `json:"target,omitempty"`
 	TemplateName    string        `json:"template_name"`
 	TemplateSource  SourceInfo    `json:"template_source"`
 	GeneratedFiles  []string      `json:"generated_files"`
@@ -194,17 +199,18 @@ type ExecutionPlan struct {
 }
 
 type PlannedStep struct {
-	ID              string   `json:"id"`
-	Index           int      `json:"index"`
-	Name            string   `json:"name"`
-	Command         string   `json:"command"`
-	Args            []string `json:"args,omitempty"`
-	Dir             string   `json:"dir"`
-	TimeoutSeconds  int      `json:"timeout_seconds,omitempty"`
-	Suggestion      string   `json:"suggestion,omitempty"`
-	Preflight       bool     `json:"preflight,omitempty"`
-	RequiresCluster bool     `json:"requires_cluster,omitempty"`
-	Retry           *Retry   `json:"retry,omitempty"`
+	ID                       string   `json:"id"`
+	Index                    int      `json:"index"`
+	Name                     string   `json:"name"`
+	Command                  string   `json:"command"`
+	Args                     []string `json:"args,omitempty"`
+	Dir                      string   `json:"dir"`
+	TimeoutSeconds           int      `json:"timeout_seconds,omitempty"`
+	Suggestion               string   `json:"suggestion,omitempty"`
+	Preflight                bool     `json:"preflight,omitempty"`
+	RequiresCluster          bool     `json:"requires_cluster,omitempty"`
+	EstablishesClusterTarget bool     `json:"establishes_cluster_target,omitempty"`
+	Retry                    *Retry   `json:"retry,omitempty"`
 }
 
 func Load(platformPath string) (*Resolved, error) { return LoadWithMode(platformPath, false) }
@@ -513,6 +519,7 @@ func (r *Resolved) BuildPlan() (*ExecutionPlan, error) {
 		return nil, err
 	}
 	plan := &ExecutionPlan{
+		Target:          r.Platform.Target,
 		TemplateName:    r.Manifest.Name,
 		TemplateSource:  r.Info,
 		GeneratedFiles:  generated,
@@ -826,17 +833,18 @@ func (r *Resolved) planStep(index int, step Step) (PlannedStep, error) {
 		stepNameForID = step.ID
 	}
 	return PlannedStep{
-		ID:              stableStepName(stepNameForID),
-		Index:           index,
-		Name:            name,
-		Command:         command,
-		Args:            args,
-		Dir:             filepath.Clean(dir),
-		TimeoutSeconds:  step.TimeoutSeconds,
-		Suggestion:      suggestion,
-		Preflight:       step.Preflight,
-		RequiresCluster: step.RequiresCluster,
-		Retry:           plannedRetry(step.Retry),
+		ID:                       stableStepName(stepNameForID),
+		Index:                    index,
+		Name:                     name,
+		Command:                  command,
+		Args:                     args,
+		Dir:                      filepath.Clean(dir),
+		TimeoutSeconds:           step.TimeoutSeconds,
+		Suggestion:               suggestion,
+		Preflight:                step.Preflight,
+		RequiresCluster:          step.RequiresCluster,
+		EstablishesClusterTarget: step.EstablishesClusterTarget,
+		Retry:                    plannedRetry(step.Retry),
 	}, nil
 }
 

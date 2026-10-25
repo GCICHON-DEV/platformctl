@@ -1,105 +1,136 @@
-# Preflight i wybór celu
+# Preflight, tożsamość i bootstrap
 
-`platformctl preflight --strict --phase bootstrap` sprawdza narzędzia,
-credentials z manifestu, Docker (jeśli wymagany), możliwość zapisu workspace
-i poprawność lokalnego stanu. Bootstrap nie wymaga istniejącego kontekstu
-Kubernetes. Dla istniejącego klastra użyj `--phase apply` lub `--phase destroy`.
+```sh
+platformctl preflight --strict --phase bootstrap
+platformctl preflight --strict --phase apply
+platformctl preflight --strict --phase destroy
+```
 
-Każdy proces diagnostyczny ma domyślnie 5 s oraz wspólny limit 32 KiB stdout
-i stderr. `--check-timeout 100ms..30s` zmienia limit pojedynczego procesu
-preflight; cały przebieg ma limit 2 min. Timeout, nieudane uruchomienie,
-przekroczony output i nieudana kontrola wersji są błędami kontroli wymaganej.
-`--strict` zwraca kod 1. Bez strict wynik JSON ma `ok: false`, a exit pozostaje
-0. Diagnostyka nie publikuje treści odpowiedzi poleceń credential/identity.
-Na macOS/Linux zakończenie kontroli sprząta jej grupę procesów; to nie jest
-sandbox dla procesu, który sam odłącza się od grupy.
+Preflight sprawdza zainstalowane narzędzia, credentials z manifestu, Docker
+(jeśli wymagany), zapis workspace i poprawność lokalnego stanu. Nie instaluje
+narzędzi, nie tworzy katalogu stanu i usuwa krótkie próby zapisu. Bootstrap nie
+wymaga istniejącego klastra; apply/destroy sprawdzają kontekst, gdy ich kroki
+go używają. Apply/destroy przygotowują zarządzane narzędzia, następnie wykonują
+strict checks przed generowaniem i krokami workflow.
 
-Preflight nie instaluje narzędzi ani nie tworzy katalogu stanu. Krótkie pliki
-próbne zapisu są usuwane. Apply/destroy zachowują dotychczasowe przygotowanie
-zarządzanych narzędzi, następnie wykonują strict preflight przed generowaniem
-plików i uruchomieniem workflow. Brakujące narzędzia dla standalone preflight
-należy przygotować osobno. Wbudowane checks nie wywołują cloud apply/destroy ani
-`kubectl config use-context`/`aws eks update-kubeconfig`. Credential command
-z manifestu pozostaje zaufanym programem autora; CLI nie udowadnia, że
-dowolny skrypt nie wykonuje mutacji. Używaj tu wyłącznie read-only poleceń.
+Proces diagnostyczny ma domyślnie 5 s i łączny limit 32 KiB stdout/stderr.
+`--check-timeout 100ms..30s` zmienia deadline standalone preflight; cały przebieg
+ma 2 min. Timeout, błąd uruchomienia, zbyt duży output i błąd kontroli wersji
+są nieudaną wymaganą kontrolą. Strict zwraca kod 1. Nonstrict może zwrócić kod 0
+z `ok: false`. Treść odpowiedzi credential/identity nie jest publikowana.
+macOS/Linux sprzątają grupę procesów kontroli; odłączające się procesy nie są
+sandboxowane. Wbudowane checks to odczyty: STS GetCallerIdentity, EKS
+DescribeCluster i lokalny kubectl config view. Credential command autora
+manifestu jest zaufanym programem — używaj tu tylko read-only poleceń.
 
-## Opcjonalna deklaracja oczekiwanej tożsamości
+## Migracja legacy jest celowym bezpiecznym zatrzymaniem
 
-Stare platform.yaml pozostają poprawne. Bez `target` wynik zawiera ostrzeżenie,
-że tożsamość celu nie została zweryfikowana. Nie traktuj sukcesu legacy
-preflight jako potwierdzenia konta lub klastra. Target jest częścią istniejącego
-digestu planu; zmiana deklaracji wymaga nowego podglądu i zatwierdzenia.
+Konfiguracja bez target nadal daje się wczytać i renderować. Nonstrict preflight
+pokazuje brakujące assertions i `ok: false`. Strict oraz apply/destroy workflow
+infrastrukturalnych odmawiają z `PLATFORMCTL_TARGET_REQUIRED`, dopóki operator
+nie zadeklaruje oczekiwanej tożsamości i nie zatwierdzi nowego planu. Dotyczy to
+AWS/Terraform, kubectl/helm/kind i jawnych requires_cluster. Lokalny workflow
+echo nie wymaga sztucznego target. To świadoma zmiana: wcześniejszy sukces
+kontroli zależności nie potwierdzał konta ani klastra. Nie przepisujemy state
+ani opublikowanych szablonów. Obsługiwane assertions to AWS i Kubernetes;
+inny provider Terraform nie dostaje fikcyjnego potwierdzenia tożsamości AWS.
 
 ```yaml
 target:
-  cluster_name: demo-platform # musi odpowiadać values.cluster_name
+  cluster_name: demo-platform # odpowiada values.cluster_name
   aws:
     account: "123456789012"
     region: eu-central-1
     profile: develop
   kubernetes:
+    kubeconfig: .platformctl/targets/demo.kubeconfig
     context: arn:aws:eks:eu-central-1:123456789012:cluster/demo-platform
     cluster: arn:aws:eks:eu-central-1:123456789012:cluster/demo-platform
-    server: https://example.eks.invalid
+    endpoint_source: eks
 ```
 
-Każda sekcja jest opcjonalna; puste `target: {}` jest błędem. AWS wymaga
-wszystkich trzech pól. Konto jest porównywane z read-only STS GetCallerIdentity
-wykonanym z jawnym profilem i regionem. CLI przekazuje ten sam profile i region do środowiska procesów workflow;
-AWS_PROFILE/AWS_DEFAULT_PROFILE i AWS_REGION/AWS_DEFAULT_REGION są lokalnie
-ustawiane z target. Odziedziczone static/web-identity credential variables są
-puste dla tych procesów, żeby nie wybrały innego konta niż zweryfikowany profil.
-Jeśli manifest definiuje wartości region/aws_profile, muszą być takie same;
-kroki Terraform z AWS target wymagają obu tych deklarowanych wartości.
-Jawne sprzeczne profile/region/context/cluster/server w argumentach narzędzi
-są odrzucane przed generowaniem plików. Alternatywne endpointy AWS z
-AWS_ENDPOINT_URL* lub argumentu --endpoint-url są odrzucane. Dla Terraform
-AWS target nie dopuszcza TF_CLI_ARGS*, -chdir, -var ani -var-file, które mogłyby
-podmienić zweryfikowane selektory poza deklaracją.
-Nie wpisuj credentiali do target. Profil musi działać bez odziedziczonych
-static/web-identity credential variables.
+AWS wymaga account/region/profile. STS i rzeczywiste procesy workflow dostają
+ten sam profil i region. Odziedziczone static/web-identity credentials są dla
+nich wyłączone; profil musi działać bez nich. Zadeklarowane wartości
+region/aws_profile muszą być zgodne; Terraform wymaga obu. Sprzeczne selektory,
+w tym EKS --name/--cluster-name, są odrzucane przed generowaniem. Target nie
+może być zastąpiony przez AWS_ENDPOINT_URL*, --endpoint-url, --no-sign-request,
+TF_CLI_ARGS*, -chdir, -var ani -var-file.
 
-Kubernetes wymaga context, nazwy cluster w kubeconfig i dokładnego HTTPS server.
-Sprawdzane są razem przez lokalne `kubectl config view --minify --output json`,
-bez raw/flatten i bez modyfikacji kubeconfig. To potwierdzenie wybranej
-konfiguracji/endpointu, nie readiness, UID zdalnego klastra ani udany deploy.
-Nazwy i PATH/config narzędzi pozostają zaufaną konfiguracją operatora.
+HOME, KUBECONFIG, AWS_CONFIG_FILE, AWS_SHARED_CREDENTIALS_FILE i AWS_CA_BUNDLE
+są rozwiązywane do tych samych absolutnych ścieżek przed zmianą cwd dziecka.
+Strict preflight sprawdza także katalogi kroków przed generowaniem; jeśli
+wymagany katalog jeszcze nie istnieje, najpierw uruchom plan i przejrzyj
+renderowane pliki. Checker sam tych katalogów nie tworzy. STS przed krokiem
+działa też w jego rzeczywistym cwd, aby względne odwołanie
+wewnątrz profilu nie wybrało innego konta niż kontrola w katalogu głównym.
+Rodzic nie zmienia swojego środowiska. Autor musi honorować te same selektory
+w providerach/backendach HCL i skryptach. CLI nie analizuje ich pełnej semantyki
+ani nie izoluje dowolnych programów — to trusted-template boundary.
 
-## Utworzenie nowego klastra
+Kubernetes porównuje context, cluster i HTTPS endpoint. Tryb statyczny wymaga
+server. `endpoint_source: eks` dopuszcza brak server: bounded DescribeCluster
+musi zwrócić ACTIVE i zgodne name/ARN/account/region. Endpoint i zdekodowane
+inline CA muszą odpowiadać rzeczywistemu scoped kubeconfig. Nie publikujemy
+jego user credentiali. To nie jest dowód readiness, zdalnego UID ani deploy.
 
-`target.bootstrap: true` w platform.yaml jawnie oznacza tworzenie klastra
-przez `platformctl apply --yes`. Ta polityka jest częścią zatwierdzanego digestu,
-nie flagą zmieniającą zachowanie po zatwierdzeniu planu.
-Przed generowaniem sprawdzane są dostępne assertions AWS/region/cluster_name;
-kontekst Kubernetes może jeszcze nie istnieć. Przed każdym krokiem kubectl,
-helm (poza repo/version) oraz krokiem oznaczonym `requires_cluster: true`
-sprawdzana jest już pełna zadeklarowana tożsamość Kubernetes. Kontrola jest
-ponawiana także przed retry. Apply z nowym target bez bootstrap oraz destroy z deklaracją Kubernetes
-wymagają jej od początku. Legacy apply bez target zachowuje możliwość
-utworzenia klastra bez gotowego kontekstu, z ostrzeżeniem o braku identity check.
-Readiness destroy odpytuje kubectl tylko przy rzeczywistych krokach kierowanych
-do klastra; samo kind delete lub terraform destroy nie wymaga kontekstu.
+## Jedno jawne przejście bootstrapu
+
+`target.bootstrap: true` należy do zatwierdzanego digestu. Wymaga cluster_name,
+endpoint_source eks/kind i jednego prywatnego pliku
+`.platformctl/targets/*.kubeconfig`, który początkowo nie istnieje. CLI nie
+przejmuje zastanego pliku, symlinku, hardlinku ani globalnego kubeconfig.
+Katalog targets jest własnością CLI i ma prawa 0700; nowy plik musi być zwykłym
+plikiem właściciela, bez praw grupy/innych, z jednym linkiem, do 128 KiB.
+Bootstrap CA jest inline. Pozostałe target configs są ograniczone do 1 MiB.
+
+Apply musi mieć dokładnie jeden marker przed operacjami na klastrze:
 
 ```yaml
 steps:
   apply:
-    - name: custom cluster operation
-      command: sh
-      args: [./deploy.sh]
-      requires_cluster: true
+    # wcześniejszy terraform apply tworzy EKS na zweryfikowanym koncie
+    - name: configure private EKS target
+      command: aws
+      args: [eks, update-kubeconfig, --name, "{{ .Values.cluster_name }}",
+             --region, "{{ .Values.region }}", --profile, "{{ .Values.aws_profile }}"]
+      establishes_cluster_target: true
 ```
 
-Autor zaufanego manifestu musi honorować zadeklarowany profil/region także
-w konfiguracji Terraform/provider (bez override konta lub assume_role na inne
-konto) i we własnych skryptach. CLI nie dowodzi semantyki dowolnego HCL/skryptu.
-Autor musi oznaczyć własne skrypty/niestandardowe programy
-wykonujące operacje na klastrze. CLI nie analizuje programu shell ani nie
-przepisuje jego argumentów. Ominięcie markerów, zmiana kontekstu wewnątrz
-skryptu lub zewnętrzna zmiana celu między kontrolą a użyciem nie są izolowane.
-Nie używaj bootstrap do obsługi istniejącego klastra. Po utworzeniu klastra
-usuń bootstrap albo ustaw false, a następnie ponów plan i zatwierdzenie.
+KUBECONFIG wskazuje prywatny plik. Argument --kubeconfig nie może przekierować
+zapisu. Marker nie ma retry >1 i nie wymaga istniejącego klastra. Własne skrypty
+wykonujące późniejsze operacje na klastrze muszą mieć `requires_cluster: true`.
+Bezpośrednie kubectl i helm poza repo/version są rozpoznawane automatycznie.
+Kontrola jest ponawiana przed każdą próbą kroku.
 
-Zmiana formatu state.json nie jest potrzebna. Przy wycofaniu CLI usuń nową
-opcjonalną sekcję target i requires_cluster ze swoich konfiguracji/manifestów
-dopiero po świadomej ocenie utraty tych kontroli; stary strict parser odrzuci
-nieznane pola zamiast je ignorować.
+Przed markerem state zapisuje pending. Po sukcesie marker musi utworzyć plik
+i przejść pełną kontrolę identity. Wszystkie źródła, wartości, kroki,
+wygenerowane bajty i pozostałe konfiguracje muszą pozostać identyczne z
+pierwotnym podglądem. Dozwolony jest wyłącznie drift missing → obserwowane bytes
+tego jednego pliku. Potem zwykły snapshot wiąże także jego nowy hash.
+
+Metadata zawiera wersjonowany receipt: origin_approved_hash,
+policy_accepted_hash, observed_hash, path i marker. Origin jest weryfikowany
+przez rekonstrukcję pierwotnego missing-file digestu. Receipt, nowy digest i
+completed checkpoint są zapisywane jednym atomowym state.Save. To jedna
+pierwotnie zatwierdzona policy transition, nie nowe zatwierdzenie człowieka.
+
+Crash przed receipt, błąd jego zapisu, brak receipt albo późniejszy drift
+powoduje odmowę resume. CLI nie naprawia state ani nie przejmuje pozostałego
+pliku. Zachowaj dowody i zasoby; po inspekcji użyj istniejącego target/workflow
+z bootstrap false i nowym planem albo świeżego workspace. Nie usuwaj realnych
+zasobów ani starego state automatycznie. Destroy przy bootstrap policy wymaga
+poprawnego receipt. Dotychczasowy state bez receipt pozostaje czytelny,
+jednak nie otrzymuje automatycznie brakującej zgody. Metadata używa istniejącej
+mapy, bez usuwania innych kluczy. Stary CLI odrzuci target/marker strict parserem.
+
+Dla Kind wymagamy `endpoint_source: kind`, context/cluster
+`kind-<cluster_name>` i predeclared HTTPS loopback IP z portem w server.
+Manifest musi ustawić ten sam API server port i oznaczyć create markerem.
+Stary stock workflow z dynamicznym portem nie ma pełnej zgodności bootstrapu;
+paired aktualizacja szablonu jest osobnym etapem. Nie deklarujemy jej odbioru.
+
+Po bootstrapie dalszy istniejący workflow nie powinien powtarzać creation
+marker. Zmiana polityki wymaga replan. Rollback CLI wymaga idle workspace i
+świadomej migracji konfiguracji/nowego zatwierdzenia; cofnięcie binarki nie cofa
+infrastruktury i nie zmienia kubeconfig/state automatycznie.

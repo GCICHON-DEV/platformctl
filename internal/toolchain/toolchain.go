@@ -221,6 +221,9 @@ func defaultVersionArgs(tool templateengine.Tool) []string {
 			return append([]string(nil), known.VersionArgs...)
 		}
 	}
+	if tool.Version == "" && tool.MinVersion == "" {
+		return nil
+	}
 	return []string{"--version"}
 }
 

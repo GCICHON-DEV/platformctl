@@ -77,6 +77,12 @@ func newDestroyCmd() *cobra.Command {
 			if err := validateRecordedPlan(current, plan, st, "destroy", resume); err != nil {
 				return err
 			}
+			if err := requireDeclaredTarget(resolved); err != nil {
+				return err
+			}
+			if err := validateBootstrapDestroy(resolved, plan, st); err != nil {
+				return err
+			}
 			for _, step := range plan.DestroySteps {
 				if err := validateStepTarget(resolved, step); err != nil {
 					return err
@@ -92,7 +98,7 @@ func newDestroyCmd() *cobra.Command {
 				return err
 			}
 			if !preflight.OK {
-				return apperror.New(apperror.CategoryDependency, "PLATFORMCTL_PREFLIGHT_FAILED", "required preflight checks failed")
+				return preflightFailure(preflight)
 			}
 			runner := executor.NewRunner(workflowStdout(cmd.OutOrStdout(), cmd.ErrOrStderr()), cmd.ErrOrStderr()).WithPathEnv(manager.PathEnv()).WithWorkflowLock(lock.File()).WithEnvironment(targetEnvironment(resolved.Platform.Target))
 			if err := runner.RequireTools(resolved.RequiredTools()...); err != nil {
@@ -143,7 +149,7 @@ func newDestroyCmd() *cobra.Command {
 				if err := validateStepTarget(resolved, step); err != nil {
 					return err
 				}
-				return requireTarget(cmd.Context(), manager.PathEnv(), resolved, phase != "bootstrap" || clusterStep(step))
+				return requireTargetAt(cmd.Context(), manager.PathEnv(), resolved, phase != "bootstrap" || clusterStep(step), step.Dir)
 			}, func(stepID string) error {
 				st.CompletedSteps[stepID] = true
 				st.LastPhase = "destroy"
