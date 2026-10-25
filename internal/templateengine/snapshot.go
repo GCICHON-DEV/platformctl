@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+type targetSnapshot struct {
+	Workspace          string
+	Environment, Files map[string]string
+}
+
 const PlanFormat = "platformctl-preview-v2"
 
 // snapshot binds the preview to rendered bytes, all input values (including
@@ -88,7 +93,17 @@ func targetDigest(plan *ExecutionPlan) (string, error) {
 			environment[key] = value
 		}
 	}
-	kubeconfigs := filepath.SplitList(os.Getenv("KUBECONFIG"))
+	runtimeEnvironment := plan.Target.Environment()
+	for key, value := range runtimeEnvironment {
+		environment[key] = value
+	}
+	envValue := func(key string) string {
+		if value, ok := runtimeEnvironment[key]; ok {
+			return value
+		}
+		return os.Getenv(key)
+	}
+	kubeconfigs := filepath.SplitList(envValue("KUBECONFIG"))
 	if len(kubeconfigs) == 0 {
 		kubeconfigs = []string{filepath.Join(home, ".kube", "config")}
 	}
@@ -97,17 +112,20 @@ func targetDigest(plan *ExecutionPlan) (string, error) {
 		{"AWS_CONFIG_FILE", filepath.Join(home, ".aws", "config")},
 		{"AWS_SHARED_CREDENTIALS_FILE", filepath.Join(home, ".aws", "credentials")},
 	} {
-		path := os.Getenv(item.key)
+		path := envValue(item.key)
 		if path == "" {
 			path = item.fallback
 		}
 		paths = append(paths, path)
 	}
-	dockerConfig := os.Getenv("DOCKER_CONFIG")
+	dockerConfig := envValue("DOCKER_CONFIG")
 	if dockerConfig == "" {
 		dockerConfig = filepath.Join(home, ".docker")
 	}
 	paths = append(paths, filepath.Join(dockerConfig, "config.json"))
+	if path := envValue("AWS_CA_BUNDLE"); path != "" {
+		paths = append(paths, path)
+	}
 	// Tools resolve relative environment paths from their own working
 	// directory, which can differ from the CLI workspace.
 	directories := []string{"."}
@@ -184,13 +202,21 @@ func targetDigest(plan *ExecutionPlan) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if plan.Target != nil {
+			path = absolute
+		}
 		// A declared target config is bound to the captured bytes, even before
 		// the first render. GeneratedHash verifies its actual bytes at execution.
 		if digest, ok := generated[absolute]; ok {
 			files[path] = digest
 			continue
 		}
-		data, err := os.ReadFile(path)
+		var data []byte
+		if plan.Target != nil {
+			data, err = ReadTargetFile(path, 1024*1024)
+		} else {
+			data, err = os.ReadFile(path)
+		}
 		if errors.Is(err, os.ErrNotExist) {
 			files[path] = "missing"
 			continue
@@ -200,10 +226,8 @@ func targetDigest(plan *ExecutionPlan) (string, error) {
 		}
 		files[path] = checksum(data)
 	}
-	return digestJSON(struct {
-		Workspace          string
-		Environment, Files map[string]string
-	}{workspace, environment, files})
+	plan.targetSnapshot = &targetSnapshot{workspace, environment, files}
+	return digestJSON(plan.targetSnapshot)
 }
 
 // Terraform applies its global -chdir before resolving per-directory data.

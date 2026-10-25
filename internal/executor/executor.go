@@ -14,6 +14,7 @@ type Runner struct {
 	Stderr       io.Writer
 	PathEnv      string
 	WorkflowLock *os.File
+	Environment  map[string]string
 }
 
 func NewRunner(stdout, stderr io.Writer) *Runner {
@@ -30,6 +31,9 @@ func (r *Runner) WithWorkflowLock(file *os.File) *Runner {
 	r.WorkflowLock = file
 	return r
 }
+
+// WithEnvironment supplies process-local overrides; it never changes the CLI environment.
+func (r *Runner) WithEnvironment(values map[string]string) *Runner { r.Environment = values; return r }
 
 func (r *Runner) RequireTools(tools ...string) error {
 	var missing []string

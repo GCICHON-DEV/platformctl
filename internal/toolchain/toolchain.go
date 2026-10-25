@@ -55,6 +55,18 @@ func (m *Manager) Resolve(name string) (string, error) {
 	return exec.LookPath(name)
 }
 
+// Check inspects installed tools only; diagnostics never download or install tools.
+func (m *Manager) Check(ctx context.Context, timeout time.Duration, tools []templateengine.Tool) []deps.Status {
+	statuses := make([]deps.Status, 0, len(tools))
+	for _, tool := range tools {
+		statuses = append(statuses, deps.CheckOneContext(ctx, timeout, deps.Tool{
+			Name: tool.Name, VersionArgs: defaultVersionArgs(tool), RequiredFor: "platform template",
+			MinVersion: tool.MinVersion, Version: desiredVersion(tool), PathEnv: m.PathEnv(),
+		}))
+	}
+	return statuses
+}
+
 func (m *Manager) Ensure(tools []templateengine.Tool) ([]deps.Status, error) {
 	if err := os.MkdirAll(m.BinDir, 0755); err != nil {
 		return nil, fmt.Errorf("create toolchain directory: %w", err)
@@ -203,6 +215,14 @@ func desiredVersion(tool templateengine.Tool) string {
 func defaultVersionArgs(tool templateengine.Tool) []string {
 	if len(tool.VersionArgs) > 0 {
 		return tool.VersionArgs
+	}
+	for _, known := range deps.RuntimeTools() {
+		if known.Name == tool.Name {
+			return append([]string(nil), known.VersionArgs...)
+		}
+	}
+	if tool.Version == "" && tool.MinVersion == "" {
+		return nil
 	}
 	return []string{"--version"}
 }

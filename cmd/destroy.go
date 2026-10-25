@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"time"
+
 	"platformctl/internal/apperror"
 	"platformctl/internal/executor"
 	"platformctl/internal/state"
@@ -75,11 +77,30 @@ func newDestroyCmd() *cobra.Command {
 			if err := validateRecordedPlan(current, plan, st, "destroy", resume); err != nil {
 				return err
 			}
+			if err := requireDeclaredTarget(resolved); err != nil {
+				return err
+			}
+			if err := validateBootstrapDestroy(resolved, plan, st); err != nil {
+				return err
+			}
+			for _, step := range plan.DestroySteps {
+				if err := validateStepTarget(resolved, step); err != nil {
+					return err
+				}
+			}
 			manager, _, err := ensureToolchain(cmd, resolved, true)
 			if err != nil {
 				return err
 			}
-			runner := executor.NewRunner(workflowStdout(cmd.OutOrStdout(), cmd.ErrOrStderr()), cmd.ErrOrStderr()).WithPathEnv(manager.PathEnv()).WithWorkflowLock(lock.File())
+			phase := "destroy"
+			preflight, err := runPreflightPhase(cmd, resolved, true, phase, 5*time.Second)
+			if err != nil {
+				return err
+			}
+			if !preflight.OK {
+				return preflightFailure(preflight)
+			}
+			runner := executor.NewRunner(workflowStdout(cmd.OutOrStdout(), cmd.ErrOrStderr()), cmd.ErrOrStderr()).WithPathEnv(manager.PathEnv()).WithWorkflowLock(lock.File()).WithEnvironment(targetEnvironment(resolved.Platform.Target))
 			if err := runner.RequireTools(resolved.RequiredTools()...); err != nil {
 				return apperror.Wrap(err, apperror.CategoryDependency, "PLATFORMCTL_MISSING_TOOLS", "required tools are missing")
 			}
@@ -118,12 +139,17 @@ func newDestroyCmd() *cobra.Command {
 				return apperror.Wrap(err, apperror.CategoryState, "PLATFORMCTL_STATE_SAVE", "could not save local state")
 			}
 
-			if err := templateengine.RunPlannedSteps(runner, "destroy", plan.DestroySteps, st.CompletedSteps, func() error {
+			if err := templateengine.RunPlannedStepsGuarded(runner, "destroy", plan.DestroySteps, st.CompletedSteps, func() error {
 				current, err := verifyPlanSnapshot(plan)
 				if err != nil {
 					return err
 				}
 				return validateRecordedPlan(current, plan, st, "destroy", resume)
+			}, func(step templateengine.PlannedStep) error {
+				if err := validateStepTarget(resolved, step); err != nil {
+					return err
+				}
+				return requireTargetAt(cmd.Context(), manager.PathEnv(), resolved, phase != "bootstrap" || clusterStep(step), step.Dir)
 			}, func(stepID string) error {
 				st.CompletedSteps[stepID] = true
 				st.LastPhase = "destroy"

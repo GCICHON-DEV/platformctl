@@ -456,7 +456,10 @@ func TestTerraformChdirBindsEffectiveWorkspace(t *testing.T) {
 				changed = strings.ReplaceAll(changed, `args: [`, `args: ["-chdir=module", `)
 				writeCLIFile(t, path, changed)
 				mustApproval(t, root, "plan")
-				mustApproval(t, root, phase, "--yes")
+				out, err := runApproval(t, root, "", phase, "--yes")
+				if err == nil || !strings.Contains(out, "PLATFORMCTL_TARGET_REQUIRED") {
+					t.Fatalf("legacy infrastructure must require identity before execution: %v %s", err, out)
+				}
 				writeCLIFile(t, actual, "changed-target-workspace")
 				before := approvalFiles(t, root)
 				for _, extra := range [][]string{nil, {"--resume"}} {

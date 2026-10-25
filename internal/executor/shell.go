@@ -81,6 +81,20 @@ func (r *Runner) RunStepWithOptions(options StepOptions) error {
 	if r.PathEnv != "" {
 		cmd.Env = appendPathEnv(r.PathEnv)
 	}
+	if len(r.Environment) > 0 {
+		if cmd.Env == nil {
+			cmd.Env = os.Environ()
+		}
+		for key, value := range r.Environment {
+			filtered := cmd.Env[:0]
+			for _, item := range cmd.Env {
+				if !strings.HasPrefix(item, key+"=") {
+					filtered = append(filtered, item)
+				}
+			}
+			cmd.Env = append(filtered, key+"="+value)
+		}
+	}
 	if options.Dir != "" && options.Dir != "." {
 		cmd.Dir = options.Dir
 	}
