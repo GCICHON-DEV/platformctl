@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -35,5 +36,13 @@ func TestMaskCommandRedactsSensitiveAssignments(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(got), []byte("plain=value")) {
 		t.Fatalf("MaskCommand redacted non-sensitive value: %s", got)
+	}
+}
+
+func TestMaskCommandRecognizesWholeArgumentWithSpaces(t *testing.T) {
+	secret := "synthetic secret with spaces"
+	got := MaskCommand("echo", []string{"--password", secret})
+	if strings.Contains(got, secret) || strings.Contains(got, "with spaces") {
+		t.Fatal("multiword argument leaked", got)
 	}
 }

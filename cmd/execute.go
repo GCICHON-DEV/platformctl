@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"platformctl/internal/apperror"
+	"platformctl/internal/redact"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -48,13 +49,18 @@ func runCLI(root *cobra.Command, args []string, stdin io.Reader, stdout, stderr 
 	var document bytes.Buffer
 	out := &checkedWriter{w: stdout}
 	diagnostics := &checkedWriter{w: stderr}
+	sanitizer := redact.Environment()
+	human := redact.NewStream(out, sanitizer)
+	diagnosticStream := redact.NewStream(diagnostics, sanitizer)
+	defer human.Flush()
+	defer diagnosticStream.Flush()
 	root.SetArgs(args)
 	root.SetIn(stdin)
-	root.SetErr(diagnostics)
+	root.SetErr(diagnosticStream)
 	if machine {
 		root.SetOut(&document)
 	} else {
-		root.SetOut(out)
+		root.SetOut(human)
 	}
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageFailure(err) })
 	root.SetHelpCommand(&cobra.Command{
@@ -114,19 +120,21 @@ func runCLI(root *cobra.Command, args []string, stdin io.Reader, stdout, stderr 
 			document.Reset()
 			_ = writeJSON(&document, map[string]interface{}{"ok": false, "error": apperror.Normalize(err)})
 		} else {
-			apperror.Render(diagnostics, err, options.Verbose, false)
+			apperror.Render(diagnosticStream, err, options.Verbose, false)
 		}
 	}
 	if machine {
 		// Child workflow streams already go to stderr. The result is emitted once;
 		// a broken stdout is reported on stderr and is never retried as JSON.
 		if _, writeErr := out.Write(document.Bytes()); writeErr != nil {
-			apperror.Render(diagnostics, apperror.Wrap(writeErr, apperror.CategoryInternal, "PLATFORMCTL_OUTPUT_WRITE", "could not write command output"), options.Verbose, false)
+			apperror.Render(diagnosticStream, apperror.Wrap(writeErr, apperror.CategoryInternal, "PLATFORMCTL_OUTPUT_WRITE", "could not write command output"), options.Verbose, false)
 			return 1
 		}
 	}
+	_ = human.Flush()
+	_ = diagnosticStream.Flush()
 	if out.err != nil {
-		apperror.Render(diagnostics, apperror.Wrap(out.err, apperror.CategoryInternal, "PLATFORMCTL_OUTPUT_WRITE", "could not write command output"), options.Verbose, false)
+		apperror.Render(diagnosticStream, apperror.Wrap(out.err, apperror.CategoryInternal, "PLATFORMCTL_OUTPUT_WRITE", "could not write command output"), options.Verbose, false)
 		return 1
 	}
 	if diagnostics.err != nil {

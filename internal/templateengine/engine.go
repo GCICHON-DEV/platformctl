@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"platformctl/internal/redact"
 	"reflect"
 	"regexp"
 	"sort"
@@ -270,6 +272,16 @@ func ResolveTemplateSource(template TemplateSource) (SourceInfo, error) {
 	}
 
 	if strings.HasPrefix(source, "https://") {
+		u, err := url.Parse(source)
+		if err != nil || u.User != nil {
+			return SourceInfo{}, fmt.Errorf("template URL must not contain credentials")
+		}
+		for key := range u.Query() {
+			if redact.SensitiveName(key) {
+				return SourceInfo{}, fmt.Errorf("template URL must not contain secret query parameters")
+			}
+		}
+
 		return SourceInfo{Original: template.Source, Resolved: source, Version: version, Kind: "url"}, nil
 	}
 	if strings.HasPrefix(source, "http://") {
@@ -350,6 +362,9 @@ func (r *Resolved) Validate() error {
 		problems = append(problems, "template.metadata.description is required")
 	}
 	for key, input := range r.Manifest.Inputs {
+		if input.Sensitive && (!isEmpty(r.Values[key]) || !isEmpty(input.Default) || !isEmpty(input.Example)) {
+			return fmt.Errorf("sensitive input %s must not contain values/default/example; use process environment or an external secret store without template interpolation", key)
+		}
 		if strings.TrimSpace(input.Description) == "" {
 			problems = append(problems, fmt.Sprintf("inputs.%s.description is required", key))
 		}

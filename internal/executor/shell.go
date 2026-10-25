@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"platformctl/internal/redact"
 	"strings"
 	"time"
 )
@@ -56,13 +57,18 @@ func (r *Runner) RunStepWithOptions(options StepOptions) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	sanitizer := redact.Command(options.Args)
+	stdout := redact.NewStream(r.Stdout, sanitizer)
+	stderr := redact.NewStream(r.Stderr, sanitizer)
+	defer stdout.Flush()
+	defer stderr.Flush()
 	started := time.Now()
 	if options.ID != "" {
-		fmt.Fprintf(r.Stdout, "\n==> %s (%s)\n", options.Name, options.ID)
+		fmt.Fprintf(stdout, "\n==> %s (%s)\n", options.Name, options.ID)
 	} else {
-		fmt.Fprintf(r.Stdout, "\n==> %s\n", options.Name)
+		fmt.Fprintf(stdout, "\n==> %s\n", options.Name)
 	}
-	fmt.Fprintf(r.Stdout, "$ %s\n", MaskCommand(options.Command, options.Args))
+	fmt.Fprintf(stdout, "$ %s\n", MaskCommand(options.Command, options.Args))
 
 	commandPath, err := r.lookPath(options.Command)
 	if err != nil {
@@ -78,10 +84,20 @@ func (r *Runner) RunStepWithOptions(options StepOptions) error {
 	if options.Dir != "" && options.Dir != "." {
 		cmd.Dir = options.Dir
 	}
-	cmd.Stdout = r.Stdout
-	cmd.Stderr = r.Stderr
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
-	if err := cmd.Run(); err != nil {
+	runErr := cmd.Run()
+	outErr := stdout.Flush()
+	errErr := stderr.Flush()
+	if runErr == nil {
+		if outErr != nil {
+			runErr = outErr
+		} else if errErr != nil {
+			runErr = errErr
+		}
+	}
+	if err := runErr; err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return stepError(options, started, fmt.Errorf("timed out after %s", timeout))
 		}
@@ -134,30 +150,7 @@ func validateStepDir(dir string) error {
 
 func MaskCommand(command string, args []string) string {
 	parts := append([]string{command}, args...)
-	return mask(strings.Join(parts, " "))
+	return redact.Command(args).Text(strings.Join(parts, " "))
 }
 
-func mask(text string) string {
-	if text == "" {
-		return text
-	}
-	fields := []string{"password", "secret", "token", "key"}
-	out := text
-	for _, field := range fields {
-		out = maskAssignments(out, field)
-	}
-	return out
-}
-
-func maskAssignments(text, field string) string {
-	parts := strings.Fields(text)
-	for i, part := range parts {
-		lower := strings.ToLower(part)
-		if strings.Contains(lower, field+"=") || strings.Contains(lower, field+":") {
-			if idx := strings.IndexAny(part, "=:"); idx >= 0 {
-				parts[i] = part[:idx+1] + "******"
-			}
-		}
-	}
-	return strings.Join(parts, " ")
-}
+func mask(text string) string { return redact.Environment().Text(text) }
