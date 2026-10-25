@@ -354,3 +354,30 @@ func chdirForTest(t *testing.T, directory string) {
 		}
 	})
 }
+
+func TestSensitiveInputsRejectInlineValuesBeforeGeneration(t *testing.T) {
+	for _, field := range []string{"value", "default", "example"} {
+		t.Run(field, func(t *testing.T) {
+			input := Input{Description: "External credential only", Type: "string", Sensitive: true}
+			values := map[string]interface{}{}
+			switch field {
+			case "value":
+				values["credential"] = "synthetic-sensitive-canary"
+			case "default":
+				input.Default = "synthetic-sensitive-canary"
+			case "example":
+				input.Example = "synthetic-sensitive-canary"
+			}
+			r := &Resolved{Manifest: Manifest{APIVersion: "platformctl.io/v1beta1", Name: "synthetic", Description: "Synthetic sensitive policy", Inputs: map[string]Input{"credential": input}}, Values: values}
+			err := r.Validate()
+			if err == nil || strings.Contains(err.Error(), "synthetic-sensitive-canary") {
+				t.Fatal("sensitive policy failed or disclosed value", err)
+			}
+		})
+	}
+	for _, source := range []string{"https://u:synthetic-password@example.invalid/template", "https://example.invalid/template?token=synthetic-token"} {
+		if _, err := ResolveTemplateSource(TemplateSource{Source: source}); err == nil {
+			t.Fatal("credential-bearing template URL accepted")
+		}
+	}
+}

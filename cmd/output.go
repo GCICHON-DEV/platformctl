@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
+	"platformctl/internal/executor"
+	"platformctl/internal/redact"
 
 	"platformctl/internal/apperror"
 	"platformctl/internal/templateengine"
@@ -83,7 +84,7 @@ func printSteps(w io.Writer, title string, steps []templateengine.PlannedStep) {
 		fmt.Fprintf(w, "  %d. %s\n", step.Index+1, step.Name)
 		fmt.Fprintf(w, "     dir: %s\n", dir)
 		fmt.Fprintf(w, "     id:  %s\n", step.ID)
-		fmt.Fprintf(w, "     run: %s %s\n", step.Command, strings.Join(step.Args, " "))
+		fmt.Fprintf(w, "     run: %s\n", executor.MaskCommand(step.Command, step.Args))
 		if step.TimeoutSeconds > 0 {
 			fmt.Fprintf(w, "     timeout: %ds\n", step.TimeoutSeconds)
 		}
@@ -97,6 +98,10 @@ func writeJSON(w io.Writer, payload interface{}) error {
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return apperror.Wrap(err, apperror.CategoryInternal, "PLATFORMCTL_OUTPUT_ENCODE", "could not encode JSON output")
+	}
+	data, err = redact.Environment().JSON(data)
+	if err != nil {
+		return err
 	}
 	data = append(data, '\n')
 	n, err := w.Write(data)
