@@ -65,6 +65,21 @@ global options przed/po nazwie serwisu. W tej ścieżce direct EKS assertions s�
 wymagane konserwatywnie także dla read-only kroków w workflow apply/destroy;
 sam preflight nadal niczego nie tworzy ani nie usuwa.
 
+Direct EKS wymaga jawnego, zgodnego --name lub --cluster-name. Nie obsługuje
+wyboru przez --cli-input-json/yaml, --resource-arn, --cluster-id ani ich
+skrócone aliasy; takie kroki odmawiają. Nazwa musi być literalnym identyfikatorem
+klastra (1–100 znaków alfanumerycznych, `_` lub `-`, pierwszy alfanumeryczny),
+bez file:// i innych źródeł wartości. Kind także wymaga jawnego --name.
+Dlatego nieskopowane EKS list-clusters/tag-resource i inne operacje bez tej
+flagi nie są obsługiwane jako bezpośrednie kroki tego kontraktu. Strict bada
+selektory workflow przed wywołaniem narzędzi; apply/destroy robią to ponownie.
+AWS --ca-bundle i --no-verify-ssl nie mogą zmienić sprawdzonego transportu;
+prywatny AWS_CA_BUNDLE może być częścią przypiętych wejść. Update-kubeconfig
+odmawia niezweryfikowanych --assume-role-arn, --role-arn i --user-alias; --alias
+musi odpowiadać zadeklarowanemu context. `--` i skróty chronionych selektorów
+są odrzucane. Pozostałe flagi nie są pełną emulacją parsera AWS/Kind; kontrakt
+nie rozciąga się na dowolne programy opakowujące te narzędzia.
+
 HOME, KUBECONFIG, AWS_CONFIG_FILE, AWS_SHARED_CREDENTIALS_FILE i AWS_CA_BUNDLE
 są rozwiązywane do tych samych absolutnych ścieżek przed zmianą cwd dziecka.
 Strict preflight sprawdza także katalogi kroków przed generowaniem; jeśli

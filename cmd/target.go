@@ -19,6 +19,7 @@ import (
 
 var accountID = regexp.MustCompile(`^[0-9]{12}$`)
 var regionID = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`)
+var clusterNameID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$`)
 
 func requiredTargetChecks(resolved *templateengine.Resolved) []checkStatus {
 	aws, kube, namedCluster, scopedKubeconfig := false, false, false, false
@@ -64,7 +65,7 @@ func requiredTargetChecks(resolved *templateengine.Resolved) []checkStatus {
 	if kube && (target == nil || target.Kubernetes == nil) {
 		checks = append(checks, checkStatus{Name: "required Kubernetes identity", Message: "infrastructure workflow requires target.kubernetes context/cluster/server; configure target and review a new plan"})
 	}
-	if namedCluster && (target == nil || !validSelector(target.ClusterName)) {
+	if namedCluster && (target == nil || !clusterNameID.MatchString(target.ClusterName)) {
 		checks = append(checks, checkStatus{Name: "required cluster name", Message: "direct EKS/Kind workflow requires target.cluster_name; configure the expected cluster and review a new plan"})
 	}
 	if scopedKubeconfig && (target == nil || target.Kubernetes == nil || target.Kubernetes.Kubeconfig == "") {
@@ -113,7 +114,7 @@ func targetChecksAt(ctx context.Context, timeout time.Duration, pathEnv string, 
 	accountVerified := false
 	fail := func(name, message string) { checks = append(checks, checkStatus{Name: name, Message: message}) }
 	if target.ClusterName != "" {
-		if value, ok := resolved.Values["cluster_name"]; !validSelector(target.ClusterName) || !ok || fmt.Sprint(value) != target.ClusterName {
+		if value, ok := resolved.Values["cluster_name"]; !clusterNameID.MatchString(target.ClusterName) || !ok || fmt.Sprint(value) != target.ClusterName {
 			fail("target cluster name", "target.cluster_name must match values.cluster_name")
 		} else {
 			checks = append(checks, checkStatus{Name: "target cluster name", OK: true})
@@ -231,8 +232,26 @@ func validateStepTarget(resolved *templateengine.Resolved, step templateengine.P
 		return apperror.New(apperror.CategoryDependency, "PLATFORMCTL_TARGET_MISMATCH", "workflow step has an unverified or conflicting target selector")
 	}
 	eks, configWrite := directEKSStep(step.Command, step.Args)
-	if (eks || filepath.Base(step.Command) == "kind") && !validSelector(target.ClusterName) {
+	if (eks || filepath.Base(step.Command) == "kind") && !clusterNameID.MatchString(target.ClusterName) {
 		return invalid()
+	}
+	if eks {
+		// Only a literal cluster selector is supported in a direct EKS step.
+		// JSON/YAML input, resource ARNs and files can otherwise select an
+		// unrelated resource while the account/region assertion still passes.
+		found := false
+		for _, arg := range step.Args {
+			key, _, _ := strings.Cut(arg, "=")
+			if key == "--name" || key == "--cluster-name" {
+				found = true
+			}
+			if strings.HasPrefix(key, "--cli-input") || strings.HasPrefix(key, "--resource-arn") || strings.HasPrefix(key, "--cluster-id") {
+				return invalid()
+			}
+		}
+		if !found {
+			return invalid()
+		}
 	}
 	if configWrite && (target.Kubernetes == nil || target.Kubernetes.Kubeconfig == "") {
 		return invalid()
@@ -245,11 +264,23 @@ func validateStepTarget(resolved *templateengine.Resolved, step templateengine.P
 			expected["--region"] = target.AWS.Region
 			expected["--endpoint-url"] = ""
 			expected["--no-sign-request"] = ""
+			expected["--ca-bundle"] = ""
+			expected["--no-verify-ssl"] = ""
 			expected["--kubeconfig"] = ""
+			if configWrite {
+				expected["--assume-role-arn"] = ""
+				expected["--role-arn"] = ""
+				expected["--user-alias"] = ""
+				expected["--alias"] = target.Kubernetes.Context
+			}
 			for _, arg := range step.Args {
 				if arg == "eks" && target.ClusterName != "" {
 					expected["--name"] = target.ClusterName
 					expected["--cluster-name"] = target.ClusterName
+					expected["--cli-input-json"] = ""
+					expected["--cli-input-yaml"] = ""
+					expected["--resource-arn"] = ""
+					expected["--cluster-id"] = ""
 				}
 			}
 		}

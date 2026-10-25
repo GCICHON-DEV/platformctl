@@ -106,11 +106,24 @@ func runPreflightPhase(cmd *cobra.Command, resolved *templateengine.Resolved, st
 			return result, requireDeclaredTarget(resolved)
 		}
 	}
-	if resolved.Platform.Target != nil && resolved.Platform.Target.Bootstrap {
-		plan, err := resolved.BuildPlan()
-		if err != nil {
-			return result, err
+	plan, err := resolved.BuildPlan()
+	if err != nil {
+		return result, err
+	}
+	steps := plan.ApplySteps
+	if phase == "destroy" {
+		steps = plan.DestroySteps
+	}
+	for _, step := range steps {
+		if err := validateStepTarget(resolved, step); err != nil {
+			result.OK = false
+			result.Checks = append(result.Checks, checkStatus{Name: "workflow target selectors", Message: "workflow step has an unverified or conflicting target selector"})
+			if strict {
+				return result, err
+			}
 		}
+	}
+	if resolved.Platform.Target != nil && resolved.Platform.Target.Bootstrap {
 		if _, err := bootstrapDefinition(resolved, plan); err != nil {
 			return result, err
 		}

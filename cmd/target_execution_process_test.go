@@ -167,13 +167,39 @@ func TestDirectEKSForeignNameRefusedBeforeMutation(t *testing.T) {
 }
 
 func TestDirectClusterAndConfigWritesRequireCompleteTarget(t *testing.T) {
+	awsTarget := "  cluster_name: cluster-a\n  aws:\n    account: '111111111111'\n    region: eu-central-1\n    profile: synthetic\n"
+	fullTarget := awsTarget + "  kubernetes:\n    kubeconfig: selected.config\n    context: expected\n    cluster: expected\n    server: https://expected.invalid\n"
 	for _, tc := range []struct {
-		name, command, args, target string
+		name, command, args, target, code string
 	}{
-		{"eks-missing-cluster", "aws", "[eks, delete-cluster, --name, arbitrary-foreign-cluster]", "  aws:\n    account: '111111111111'\n    region: eu-central-1\n    profile: synthetic\n"},
-		{"kind-missing-cluster", "kind", "[delete, cluster, --name, arbitrary-foreign-cluster]", "  kubernetes:\n    context: expected\n    cluster: expected\n    server: https://expected.invalid\n"},
-		{"eks-config-no-kubernetes", "aws", "[eks, update-kubeconfig, --name, cluster-a]", "  cluster_name: cluster-a\n  aws:\n    account: '111111111111'\n    region: eu-central-1\n    profile: synthetic\n"},
-		{"eks-config-no-scoped-file", "aws", "[eks, --region, eu-central-1, update-kubeconfig, --name, cluster-a]", "  cluster_name: cluster-a\n  aws:\n    account: '111111111111'\n    region: eu-central-1\n    profile: synthetic\n  kubernetes:\n    context: expected\n    cluster: expected\n    server: https://expected.invalid\n"},
+		{"eks-missing-cluster", "aws", "[eks, delete-cluster, --name, arbitrary-foreign-cluster]", "  aws:\n    account: '111111111111'\n    region: eu-central-1\n    profile: synthetic\n", "PLATFORMCTL_TARGET_REQUIRED"},
+		{"kind-missing-cluster", "kind", "[delete, cluster, --name, arbitrary-foreign-cluster]", "  kubernetes:\n    context: expected\n    cluster: expected\n    server: https://expected.invalid\n", "PLATFORMCTL_TARGET_REQUIRED"},
+		{"eks-config-no-kubernetes", "aws", "[eks, update-kubeconfig, --name, cluster-a]", awsTarget, "PLATFORMCTL_TARGET_REQUIRED"},
+		{"eks-config-no-scoped-file", "aws", "[eks, --region, eu-central-1, update-kubeconfig, --name, cluster-a]", awsTarget + "  kubernetes:\n    context: expected\n    cluster: expected\n    server: https://expected.invalid\n", "PLATFORMCTL_TARGET_REQUIRED"},
+		{"eks-json-only-selector", "aws", "[eks, delete-cluster, --cli-input-json, 'file://foreign.json']", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-json-with-name", "aws", "[eks, delete-cluster, --name, cluster-a, --cli-input-json, 'file://foreign.json']", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-abbreviated-json", "aws", "[eks, delete-cluster, --name, cluster-a, --cli-i, 'file://foreign.json']", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-yaml-with-name", "aws", "[eks, delete-cluster, --name, cluster-a, --cli-input-yaml, 'file://foreign.yaml']", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-resource-arn", "aws", "[eks, tag-resource, --resource-arn, 'arn:aws:eks:eu-central-1:111111111111:cluster/foreign']", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-cluster-id", "aws", "[eks, describe-cluster, --name, cluster-a, --cluster-id, foreign]", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-inline-foreign-name", "aws", "[eks, delete-cluster, --name=foreign]", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-inline-json", "aws", "[eks, delete-cluster, --name=cluster-a, --cli-input-json=file://foreign.json]", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-double-dash", "aws", "[eks, delete-cluster, --, --name, cluster-a]", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-foreign-profile", "aws", "[--profile=foreign, eks, delete-cluster, --name, cluster-a]", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-foreign-region", "aws", "[eks, --region, eu-west-1, delete-cluster, --name, cluster-a]", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-foreign-endpoint", "aws", "[eks, delete-cluster, --name, cluster-a, --endpoint-url=https://foreign.invalid]", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-endpoint-alias", "aws", "[eks, delete-cluster, --name, cluster-a, --endpoint, https://foreign.invalid]", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-ca-override", "aws", "[eks, delete-cluster, --name, cluster-a, --ca-bundle, foreign.pem]", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-tls-disabled", "aws", "[eks, delete-cluster, --name, cluster-a, --no-verify-ssl]", awsTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-unscoped-role", "aws", "[eks, update-kubeconfig, --name, cluster-a, --assume-role-arn, foreign]", fullTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-unscoped-auth-role", "aws", "[eks, update-kubeconfig, --name, cluster-a, --role-arn, foreign]", fullTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-foreign-alias", "aws", "[eks, update-kubeconfig, --name, cluster-a, --alias, foreign]", fullTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"eks-foreign-kubeconfig", "aws", "[eks, update-kubeconfig, --name, cluster-a, --kubeconfig, foreign]", fullTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"kind-default-selector", "kind", "[delete, cluster]", "  cluster_name: cluster-a\n  kubernetes:\n    context: expected\n    cluster: expected\n    server: https://expected.invalid\n", "PLATFORMCTL_TARGET_MISMATCH"},
+		{"kind-double-dash", "kind", "[delete, cluster, --, --name, cluster-a]", fullTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"kind-name-abbreviation", "kind", "[delete, cluster, --nam, cluster-a]", fullTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"kind-inline-foreign-name", "kind", "[delete, cluster, --name=foreign]", fullTarget, "PLATFORMCTL_TARGET_MISMATCH"},
+		{"kind-foreign-kubeconfig", "kind", "[delete, cluster, --name, cluster-a, --kubeconfig=foreign]", fullTarget, "PLATFORMCTL_TARGET_MISMATCH"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := setupCLITemplate(t)
@@ -202,9 +228,54 @@ func TestDirectClusterAndConfigWritesRequireCompleteTarget(t *testing.T) {
 				p := workflowProcess(t, root, args...)
 				p.Env = append(p.Env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 				out, err := p.CombinedOutput()
-				if err == nil || !strings.Contains(string(out), "PLATFORMCTL_TARGET_REQUIRED") || exists(filepath.Join(root, "unexpected-tool-call")) || exists(filepath.Join(root, "generated")) || exists(filepath.Join(root, ".platformctl", "state.json")) {
+				if err == nil || !strings.Contains(string(out), tc.code) || exists(filepath.Join(root, "unexpected-tool-call")) || exists(filepath.Join(root, "generated")) || exists(filepath.Join(root, ".platformctl", "state.json")) {
 					t.Fatalf("incomplete target executed: args=%v err=%v output=%s", args, err, out)
 				}
+			}
+		})
+	}
+}
+
+func TestDirectEKSExplicitExpectedNameExecutesOnlyScopedStub(t *testing.T) {
+	for _, args := range []string{
+		"[eks, synthetic-cluster-operation, --name, cluster-a]",
+		"[eks, synthetic-cluster-operation, --cluster-name, cluster-a]",
+		"[eks, synthetic-cluster-operation, --name=cluster-a]",
+		"[eks, synthetic-cluster-operation, --cluster-name=cluster-a]",
+		"[--profile, synthetic, eks, synthetic-cluster-operation, --name, cluster-a]",
+		"[eks, --region, eu-central-1, synthetic-cluster-operation, --name, cluster-a]",
+	} {
+		t.Run(args, func(t *testing.T) {
+			root := setupCLITemplate(t)
+			bin := filepath.Join(root, "bin")
+			mkdir(t, bin)
+			checkStub(t, bin, "aws", `case "$1" in
+--version) echo 'aws-cli/2.0.0';;
+sts) printf '{"Account":"111111111111"}';;
+*) [ "$AWS_PROFILE" = synthetic ] && [ "$AWS_REGION" = eu-central-1 ] || exit 2
+case "$*" in
+'eks synthetic-cluster-operation --name cluster-a'|'eks synthetic-cluster-operation --cluster-name cluster-a'|'eks synthetic-cluster-operation --name=cluster-a'|'eks synthetic-cluster-operation --cluster-name=cluster-a'|'--profile synthetic eks synthetic-cluster-operation --name cluster-a'|'eks --region eu-central-1 synthetic-cluster-operation --name cluster-a') touch scoped-stub-executed;;
+*) exit 2;; esac;; esac`)
+			path := filepath.Join(root, "template", "platform.template.yaml")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest := strings.Replace(string(data), "inputs:\n", "inputs:\n  cluster_name: {type: string, description: Expected cluster, default: cluster-a}\n", 1)
+			manifest = strings.Replace(manifest, "- name: echo", "- name: aws", 1)
+			manifest = strings.Replace(manifest, "command: echo", "command: aws", 1)
+			manifest = strings.Replace(manifest, `args: ["apply", "{{ .Values.project_name }}"]`, "args: "+args, 1)
+			writeCLIFile(t, path, manifest)
+			config, err := os.ReadFile(filepath.Join(root, "platform.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeCLIFile(t, filepath.Join(root, "platform.yaml"), string(config)+"target:\n  cluster_name: cluster-a\n  aws:\n    account: '111111111111'\n    region: eu-central-1\n    profile: synthetic\n")
+			p := workflowProcess(t, root, "apply", "--yes", "--json")
+			p.Env = append(p.Env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			out, err := p.CombinedOutput()
+			if err != nil || !exists(filepath.Join(root, "scoped-stub-executed")) {
+				t.Fatalf("scoped stub failed: %v %s", err, out)
 			}
 		})
 	}
