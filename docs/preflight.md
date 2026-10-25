@@ -57,6 +57,14 @@ w tym EKS --name/--cluster-name, są odrzucane przed generowaniem. Target nie
 może być zastąpiony przez AWS_ENDPOINT_URL*, --endpoint-url, --no-sign-request,
 TF_CLI_ARGS*, -chdir, -var ani -var-file.
 
+Bezpośrednie kroki EKS i Kind wymagają także target.cluster_name, również gdy
+podają --name w argv. Samo zweryfikowane konto nie zatwierdza dowolnego klastra.
+EKS update-kubeconfig wymaga target.kubernetes z jawnym kubeconfig; zapis do
+domyślnego/globalnego pliku nie jest dopuszczany. Kontrola rozpoznaje też AWS
+global options przed/po nazwie serwisu. W tej ścieżce direct EKS assertions są
+wymagane konserwatywnie także dla read-only kroków w workflow apply/destroy;
+sam preflight nadal niczego nie tworzy ani nie usuwa.
+
 HOME, KUBECONFIG, AWS_CONFIG_FILE, AWS_SHARED_CREDENTIALS_FILE i AWS_CA_BUNDLE
 są rozwiązywane do tych samych absolutnych ścieżek przed zmianą cwd dziecka.
 Strict preflight sprawdza także katalogi kroków przed generowaniem; jeśli

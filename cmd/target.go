@@ -21,7 +21,7 @@ var accountID = regexp.MustCompile(`^[0-9]{12}$`)
 var regionID = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`)
 
 func requiredTargetChecks(resolved *templateengine.Resolved) []checkStatus {
-	aws, kube := false, false
+	aws, kube, namedCluster, scopedKubeconfig := false, false, false, false
 	inspect := func(name string) {
 		switch filepath.Base(name) {
 		case "aws", "terraform":
@@ -44,6 +44,16 @@ func requiredTargetChecks(resolved *templateengine.Resolved) []checkStatus {
 			if step.RequiresCluster || step.EstablishesClusterTarget {
 				kube = true
 			}
+			args := make([]string, len(step.Args))
+			for i, arg := range step.Args {
+				args[i], err = resolved.Render(arg)
+				if err != nil {
+					return []checkStatus{{Name: "workflow identity", Message: "workflow arguments could not be resolved"}}
+				}
+			}
+			eks, configWrite := directEKSStep(command, args)
+			namedCluster = namedCluster || eks || filepath.Base(command) == "kind"
+			scopedKubeconfig = scopedKubeconfig || configWrite
 		}
 	}
 	var checks []checkStatus
@@ -54,7 +64,33 @@ func requiredTargetChecks(resolved *templateengine.Resolved) []checkStatus {
 	if kube && (target == nil || target.Kubernetes == nil) {
 		checks = append(checks, checkStatus{Name: "required Kubernetes identity", Message: "infrastructure workflow requires target.kubernetes context/cluster/server; configure target and review a new plan"})
 	}
+	if namedCluster && (target == nil || !validSelector(target.ClusterName)) {
+		checks = append(checks, checkStatus{Name: "required cluster name", Message: "direct EKS/Kind workflow requires target.cluster_name; configure the expected cluster and review a new plan"})
+	}
+	if scopedKubeconfig && (target == nil || target.Kubernetes == nil || target.Kubernetes.Kubeconfig == "") {
+		checks = append(checks, checkStatus{Name: "required scoped kubeconfig", Message: "EKS update-kubeconfig requires target.kubernetes and an explicit kubeconfig path; default/global config writes are refused"})
+	}
 	return checks
+}
+
+// Recognize the direct service even when AWS global options precede it. This
+// deliberately fails closed for an ambiguous direct argument vector; arbitrary
+// shell/provider programs remain the documented trusted-template boundary.
+func directEKSStep(command string, args []string) (bool, bool) {
+	if filepath.Base(command) != "aws" {
+		return false, false
+	}
+	for i, arg := range args {
+		if arg == "eks" {
+			for _, remaining := range args[i+1:] {
+				if remaining == "update-kubeconfig" {
+					return true, true
+				}
+			}
+			return true, false
+		}
+	}
+	return false, false
 }
 
 func requireDeclaredTarget(resolved *templateengine.Resolved) error {
@@ -193,6 +229,13 @@ func validateStepTarget(resolved *templateengine.Resolved, step templateengine.P
 	}
 	invalid := func() error {
 		return apperror.New(apperror.CategoryDependency, "PLATFORMCTL_TARGET_MISMATCH", "workflow step has an unverified or conflicting target selector")
+	}
+	eks, configWrite := directEKSStep(step.Command, step.Args)
+	if (eks || filepath.Base(step.Command) == "kind") && !validSelector(target.ClusterName) {
+		return invalid()
+	}
+	if configWrite && (target.Kubernetes == nil || target.Kubernetes.Kubeconfig == "") {
+		return invalid()
 	}
 	expected := map[string]string{}
 	switch filepath.Base(step.Command) {

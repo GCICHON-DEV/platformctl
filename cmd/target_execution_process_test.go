@@ -155,12 +155,56 @@ func TestDirectEKSForeignNameRefusedBeforeMutation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			writeCLIFile(t, filepath.Join(root, "platform.yaml"), string(config)+"target:\n  cluster_name: cluster-a\n  aws:\n    account: '111111111111'\n    region: eu-central-1\n    profile: synthetic\n")
+			writeCLIFile(t, filepath.Join(root, "platform.yaml"), string(config)+"target:\n  cluster_name: cluster-a\n  aws:\n    account: '111111111111'\n    region: eu-central-1\n    profile: synthetic\n  kubernetes:\n    kubeconfig: selected.config\n    context: expected\n    cluster: expected\n    server: https://expected.invalid\n")
 			p := workflowProcess(t, root, "apply", "--yes", "--json")
 			p.Env = append(p.Env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			out, err := p.CombinedOutput()
 			if err == nil || !strings.Contains(string(out), "PLATFORMCTL_TARGET_MISMATCH") || exists(filepath.Join(root, "unexpected-mutation")) || exists(filepath.Join(root, "generated")) || exists(filepath.Join(root, ".platformctl", "state.json")) {
 				t.Fatalf("foreign EKS name executed: %v %s", err, out)
+			}
+		})
+	}
+}
+
+func TestDirectClusterAndConfigWritesRequireCompleteTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name, command, args, target string
+	}{
+		{"eks-missing-cluster", "aws", "[eks, delete-cluster, --name, arbitrary-foreign-cluster]", "  aws:\n    account: '111111111111'\n    region: eu-central-1\n    profile: synthetic\n"},
+		{"kind-missing-cluster", "kind", "[delete, cluster, --name, arbitrary-foreign-cluster]", "  kubernetes:\n    context: expected\n    cluster: expected\n    server: https://expected.invalid\n"},
+		{"eks-config-no-kubernetes", "aws", "[eks, update-kubeconfig, --name, cluster-a]", "  cluster_name: cluster-a\n  aws:\n    account: '111111111111'\n    region: eu-central-1\n    profile: synthetic\n"},
+		{"eks-config-no-scoped-file", "aws", "[eks, --region, eu-central-1, update-kubeconfig, --name, cluster-a]", "  cluster_name: cluster-a\n  aws:\n    account: '111111111111'\n    region: eu-central-1\n    profile: synthetic\n  kubernetes:\n    context: expected\n    cluster: expected\n    server: https://expected.invalid\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := setupCLITemplate(t)
+			bin := filepath.Join(root, "bin")
+			mkdir(t, bin)
+			// Any diagnostic or mutating invocation would leave a sentinel.
+			// The fixture never reads or writes an operator's kubeconfig.
+			checkStub(t, bin, tc.command, "touch unexpected-tool-call; exit 0")
+			path := filepath.Join(root, "template", "platform.template.yaml")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest := strings.Replace(string(data), "inputs:\n", "inputs:\n  cluster_name: {type: string, description: Expected cluster, default: cluster-a}\n", 1)
+			manifest = strings.Replace(manifest, "- name: echo", "- name: "+tc.command, 1)
+			manifest = strings.ReplaceAll(manifest, "command: echo", "command: "+tc.command)
+			manifest = strings.ReplaceAll(manifest, `args: ["apply", "{{ .Values.project_name }}"]`, "args: "+tc.args)
+			manifest = strings.ReplaceAll(manifest, `args: ["destroy", "{{ .Values.project_name }}"]`, "args: "+tc.args)
+			writeCLIFile(t, path, manifest)
+			config, err := os.ReadFile(filepath.Join(root, "platform.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeCLIFile(t, filepath.Join(root, "platform.yaml"), string(config)+"target:\n"+tc.target)
+			for _, args := range [][]string{{"preflight", "--strict", "--json"}, {"apply", "--yes", "--json"}, {"destroy", "--yes", "--json"}} {
+				p := workflowProcess(t, root, args...)
+				p.Env = append(p.Env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+				out, err := p.CombinedOutput()
+				if err == nil || !strings.Contains(string(out), "PLATFORMCTL_TARGET_REQUIRED") || exists(filepath.Join(root, "unexpected-tool-call")) || exists(filepath.Join(root, "generated")) || exists(filepath.Join(root, ".platformctl", "state.json")) {
+					t.Fatalf("incomplete target executed: args=%v err=%v output=%s", args, err, out)
+				}
 			}
 		})
 	}
